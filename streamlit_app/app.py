@@ -167,9 +167,11 @@ def generate_full_week_workouts_cortex(client_id: str, client_data: dict, week: 
 2. Include {client_data['DAYS_PER_WEEK']} training days and {7 - client_data['DAYS_PER_WEEK']} rest days
 3. ENSURE THE WORKOUTS ARE SIGNIFICANTLY DIFFERENT from the previous weeks shown above
 4. Vary the exercises, rep ranges, and training focus across the week
-5. Include proper warm-up and cool-down for each training day
-6. Space out muscle groups to allow for recovery (e.g., no back-to-back same muscle groups)
-7. Rest days should be labeled with recovery recommendations
+5. Include at least 1 running day within the {client_data['DAYS_PER_WEEK']} training days
+6. On gym days, ensure to include at least 5 exercises
+7. Include proper warm-up and cool-down for each training day
+8. Space out muscle groups to allow for recovery (e.g., no back-to-back same muscle groups)
+9. Rest days should be labeled with recovery recommendations
 
 Format EXACTLY as this JSON (no extra text):
 {{
@@ -350,14 +352,20 @@ def save_workout(client_id: str, workout_data: dict, prompt: str, week: int = 1,
         st.error(f"Error saving workout: {str(e)}")
         return None
 
-def save_weekly_workouts(client_id: str, weekly_data: dict, prompt: str):
+def save_weekly_workouts(client_id: str, weekly_data: dict, prompt: str, start_date=None):
     """Save all workouts from a full week to database"""
     try:
         week = weekly_data.get('week', 1)
         saved_count = 0
         
+        # If no start date provided, use today
+        if start_date is None:
+            start_date = datetime.now().date()
+        
         for day_data in weekly_data.get('days', []):
             day_num = day_data.get('day', 1)
+            # Calculate workout date based on start date and day number
+            workout_date = start_date + timedelta(days=day_num - 1)
             
             if day_data.get('is_rest_day', False):
                 # Save rest day as a special entry
@@ -366,11 +374,12 @@ def save_weekly_workouts(client_id: str, weekly_data: dict, prompt: str):
                 
                 insert_sql = f"""
                 INSERT INTO TRAINING_DB.PUBLIC.generated_workouts
-                (workout_id, client_id, workout_week, workout_day, workout_focus, duration_min,
+                (workout_id, client_id, workout_date, workout_week, workout_day, workout_focus, duration_min,
                  warm_up, exercises, cool_down, cortex_prompt, cortex_model)
                 SELECT
                 '{workout_id}',
                 '{client_id}',
+                '{workout_date}',
                 {week},
                 {day_num},
                 'Rest Day',
@@ -391,11 +400,12 @@ def save_weekly_workouts(client_id: str, weekly_data: dict, prompt: str):
                 
                 insert_sql = f"""
                 INSERT INTO TRAINING_DB.PUBLIC.generated_workouts
-                (workout_id, client_id, workout_week, workout_day, workout_focus, duration_min,
+                (workout_id, client_id, workout_date, workout_week, workout_day, workout_focus, duration_min,
                  warm_up, exercises, cool_down, cortex_prompt, cortex_model)
                 SELECT
                 '{workout_id}',
                 '{client_id}',
+                '{workout_date}',
                 {week},
                 {day_num},
                 '{focus.replace("'", "''")}',
@@ -417,19 +427,24 @@ def save_weekly_workouts(client_id: str, weekly_data: dict, prompt: str):
         st.error(f"Error saving weekly workouts: {str(e)}")
         return 0
 
-def save_meal_plan(client_id: str, meal_plan_data: dict, prompt: str, week: int = 1):
+def save_meal_plan(client_id: str, meal_plan_data: dict, prompt: str, week: int = 1, start_date=None):
     """Save generated meal plan to database"""
     try:
         meal_plan_id = generate_uuid()
         totals = meal_plan_data['weekly_totals']
         
+        # If no start date provided, use today
+        if start_date is None:
+            start_date = datetime.now().date()
+        
         insert_sql = f"""
         INSERT INTO TRAINING_DB.PUBLIC.meal_plans
-        (meal_plan_id, client_id, plan_week, duration_days, total_calories, protein_g, 
+        (meal_plan_id, client_id, plan_start_date, plan_week, duration_days, total_calories, protein_g, 
          carbs_g, fat_g, meal_plan_json, cortex_prompt, cortex_model)
         SELECT
         '{meal_plan_id}',
         '{client_id}',
+        '{start_date}',
         {week},
         7,
         {totals['calories']},
@@ -510,6 +525,36 @@ def get_client_weight_history(client_id: str):
         return df
     except Exception as e:
         st.error(f"Error fetching weight history: {str(e)}")
+        return pd.DataFrame()
+
+def get_client_workouts_by_date_range(client_id: str, start_date, end_date):
+    """Get workouts for a client within a date range"""
+    try:
+        df = session.sql(f"""
+        SELECT * FROM TRAINING_DB.PUBLIC.generated_workouts 
+        WHERE client_id = '{client_id}'
+        AND workout_date >= '{start_date}'
+        AND workout_date <= '{end_date}'
+        ORDER BY workout_date ASC, workout_day ASC
+        """).to_pandas()
+        return df
+    except Exception as e:
+        st.error(f"Error fetching workouts by date range: {str(e)}")
+        return pd.DataFrame()
+
+def get_client_meal_plans_by_date_range(client_id: str, start_date, end_date):
+    """Get meal plans for a client within a date range"""
+    try:
+        df = session.sql(f"""
+        SELECT * FROM TRAINING_DB.PUBLIC.meal_plans 
+        WHERE client_id = '{client_id}'
+        AND plan_start_date >= '{start_date}'
+        AND plan_start_date <= '{end_date}'
+        ORDER BY plan_start_date ASC
+        """).to_pandas()
+        return df
+    except Exception as e:
+        st.error(f"Error fetching meal plans by date range: {str(e)}")
         return pd.DataFrame()
 
 # ============================================================================
@@ -643,7 +688,11 @@ def page_workout_generator():
         st.markdown("### Generate a Full 7-Day Training Program")
         st.info("💡 The AI will review your last 4 weeks of training and create a NEW program with varied exercises and focuses to prevent plateaus.")
         
-        week = st.number_input("Week Number", min_value=1, max_value=52, value=1, help="Which week of the program is this?")
+        col1, col2 = st.columns(2)
+        with col1:
+            week = st.number_input("Week Number", min_value=1, max_value=52, value=1, help="Which week of the program is this?")
+        with col2:
+            start_date = st.date_input("Start Date (Monday of this week)", value=datetime.now().date(), help="First day of the workout week")
         
         if st.button("🤖 Generate Full Week with AI", use_container_width=True, type="primary"):
             with st.spinner("Analyzing previous workouts and generating new full-week program..."):
@@ -729,16 +778,11 @@ def page_workout_generator():
                                 st.markdown("**Cool-down:**")
                                 st.write(day_data.get('cool_down', 'N/A'))
                     
-                    st.divider()
-                    
-                    # Save button
-                    if st.button("💾 Save Full Week to Database", use_container_width=True, type="primary"):
-                        with st.spinner("Saving all 7 days to database..."):
-                            saved_count = save_weekly_workouts(client_id, st.session_state.weekly_data, prompt)
-                            if saved_count > 0:
-                                st.success(f"✅ Full week saved! {saved_count} workout days stored in database.")
-                                if 'weekly_data' in st.session_state:
-                                    del st.session_state.weekly_data
+                    saved_count = save_weekly_workouts(client_id, st.session_state.weekly_data, prompt, start_date=start_date)
+                    if saved_count > 0:
+                        st.success(f"✅ Full week saved! {saved_count} workout days stored in database.")
+                        if 'weekly_data' in st.session_state:
+                            del st.session_state.weekly_data
     
     with tab2:
         st.markdown("### Workout History")
@@ -746,7 +790,7 @@ def page_workout_generator():
         
         if not workouts_df.empty:
             st.dataframe(
-                workouts_df[['WORKOUT_ID', 'GENERATION_DATE', 'WORKOUT_WEEK', 'WORKOUT_DAY', 'WORKOUT_FOCUS']],
+                workouts_df[['WORKOUT_ID', 'WORKOUT_DATE', 'GENERATION_DATE', 'WORKOUT_WEEK', 'WORKOUT_DAY', 'WORKOUT_FOCUS']],
                 use_container_width=True,
                 hide_index=True
             )
@@ -786,7 +830,11 @@ def page_meal_plan_generator():
     tab1, tab2 = st.tabs(["Generate New Meal Plan", "View History"])
     
     with tab1:
-        week = st.number_input("Week Number", min_value=1, max_value=52, value=1, key="meal_plan_week")
+        col1, col2 = st.columns(2)
+        with col1:
+            week = st.number_input("Week Number", min_value=1, max_value=52, value=1, key="meal_plan_week")
+        with col2:
+            meal_start_date = st.date_input("Start Date (Monday of this week)", value=datetime.now().date(), key="meal_plan_start_date")
         
         if st.button("🤖 Generate Meal Plan with AI", use_container_width=True, type="primary"):
             with st.spinner("Generating meal plan using Cortex Prompt Complete..."):
@@ -817,13 +865,10 @@ def page_meal_plan_generator():
                             with st.expander(f"{meal_type} - {meal['calories']} kcal, {meal['protein']}g protein"):
                                 for food in meal['foods']:
                                     st.write(f"• {food}")
-                    
-                    st.divider()
-                    
-                    if st.button("💾 Save Meal Plan to Database", use_container_width=True, key="save_meal_plan"):
-                        meal_plan_id = save_meal_plan(client_id, meal_plan_data, prompt, week)
-                        if meal_plan_id:
-                            st.success(f"✅ Meal plan saved! ID: {meal_plan_id}")
+                
+                meal_plan_id = save_meal_plan(client_id, meal_plan_data, prompt, week, start_date=meal_start_date)
+                if meal_plan_id:
+                    st.success(f"✅ Meal plan saved! ID: {meal_plan_id}")
     
     with tab2:
         st.markdown("### Meal Plan History")
@@ -949,6 +994,302 @@ def page_weight_tracking():
                 st.error(f"Error saving measurements: {str(e)}")
 
 # ============================================================================
+# Page: Workout Summary
+# ============================================================================
+
+def page_workout_summary():
+    st.title("📊 Workout Summary")
+    st.markdown("View workouts for a selected date range")
+    
+    clients_df = get_clients()
+    
+    if clients_df.empty:
+        st.warning("No clients found. Please create a client first in the Home page.")
+        return
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        selected_client_name = st.selectbox(
+            "Select Client",
+            clients_df['CLIENT_NAME'].tolist(),
+            key="workout_summary_client"
+        )
+        selected_client = clients_df[clients_df['CLIENT_NAME'] == selected_client_name].iloc[0]
+        client_id = selected_client['CLIENT_ID']
+    
+    with col2:
+        st.metric("Fitness Level", selected_client['FITNESS_LEVEL'])
+    
+    st.divider()
+    
+    # Date range selector
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col1:
+        date_range_option = st.radio("Select Date Range", ["This Week", "This Month", "Custom Range"])
+    
+    with col2:
+        if date_range_option == "This Week":
+            today = datetime.now().date()
+            # Get Monday of this week
+            start_date = today - timedelta(days=today.weekday())
+            end_date = start_date + timedelta(days=6)
+            st.write(f"**Start:** {start_date}")
+        elif date_range_option == "This Month":
+            today = datetime.now().date()
+            start_date = today.replace(day=1)
+            if today.month == 12:
+                end_date = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                end_date = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
+            st.write(f"**Start:** {start_date}")
+        else:
+            col_start, col_end = st.columns(2)
+            with col_start:
+                start_date = st.date_input("Start Date", value=datetime.now().date() - timedelta(days=7), key="workout_range_start")
+            with col_end:
+                end_date = st.date_input("End Date", value=datetime.now().date(), key="workout_range_end")
+            st.write(f"**Range:** {start_date} to {end_date}")
+    
+    with col3:
+        if date_range_option != "Custom Range":
+            if date_range_option == "This Month":
+                st.write(f"**End:** {end_date}")
+            else:
+                st.write(f"**End:** {end_date}")
+    
+    st.divider()
+    
+    # Fetch workouts for the date range
+    workouts_df = get_client_workouts_by_date_range(client_id, start_date, end_date)
+    
+    if workouts_df.empty:
+        st.info(f"No workouts found for {selected_client_name} in the selected date range.")
+    else:
+        # Summary statistics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total_workouts = len(workouts_df[workouts_df['WORKOUT_FOCUS'] != 'Rest Day'])
+        rest_days = len(workouts_df[workouts_df['WORKOUT_FOCUS'] == 'Rest Day'])
+        total_duration = workouts_df[workouts_df['WORKOUT_FOCUS'] != 'Rest Day']['DURATION_MIN'].sum()
+        avg_duration = total_duration / total_workouts if total_workouts > 0 else 0
+        
+        col1.metric("Training Days", total_workouts)
+        col2.metric("Rest Days", rest_days)
+        col3.metric("Total Duration", f"{int(total_duration)} min")
+        col4.metric("Avg Duration", f"{int(avg_duration)} min")
+        
+        st.divider()
+        
+        # Display by focus
+        st.markdown("### Workouts by Focus Area")
+        focus_counts = workouts_df[workouts_df['WORKOUT_FOCUS'] != 'Rest Day']['WORKOUT_FOCUS'].value_counts()
+        if not focus_counts.empty:
+            fig = px.bar(focus_counts, title="Workout Focus Distribution", labels={'index': 'Focus Area', 'value': 'Count'})
+            st.plotly_chart(fig, use_container_width=True)
+        
+        st.divider()
+        
+        # Detailed workout list
+        st.markdown("### Detailed Workouts")
+        
+        for _, workout in workouts_df.iterrows():
+            workout_date = workout.get('WORKOUT_DATE', 'N/A')
+            focus = workout['WORKOUT_FOCUS']
+            
+            if focus == 'Rest Day':
+                with st.expander(f"📅 {workout_date} - 🔄 Rest Day"):
+                    st.info(workout.get('WARM_UP', 'Rest day - focus on recovery'))
+            else:
+                with st.expander(f"📅 {workout_date} - 💪 {focus} ({workout['DURATION_MIN']} min)"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**Warm-up:**")
+                        st.write(workout.get('WARM_UP', 'N/A'))
+                    with col2:
+                        st.markdown("**Cool-down:**")
+                        st.write(workout.get('COOL_DOWN', 'N/A'))
+                    
+                    st.markdown("**Exercises:**")
+                    exercises = workout.get('EXERCISES')
+                    if exercises:
+                        if isinstance(exercises, str):
+                            exercises = json.loads(exercises)
+                        for i, exercise in enumerate(exercises, 1):
+                            ex_col1, ex_col2, ex_col3 = st.columns([2, 1, 2])
+                            with ex_col1:
+                                st.write(f"**{exercise.get('name', 'N/A')}**")
+                            with ex_col2:
+                                st.write(f"{exercise.get('sets', 0)}x{exercise.get('reps', '0')}")
+                            with ex_col3:
+                                st.write(f"Rest: {exercise.get('rest_sec', 0)}s")
+        
+        st.divider()
+        
+        # Raw data table
+        st.markdown("### Raw Data")
+        st.dataframe(
+            workouts_df[['WORKOUT_ID', 'WORKOUT_DATE', 'GENERATION_DATE', 'WORKOUT_WEEK', 'WORKOUT_DAY', 'WORKOUT_FOCUS', 'DURATION_MIN']],
+            use_container_width=True,
+            hide_index=True
+        )
+
+# ============================================================================
+# Page: Meal Plan Summary
+# ============================================================================
+
+def page_meal_plan_summary():
+    st.title("🍽️ Meal Plan Summary")
+    st.markdown("View meal plans for a selected date range")
+    
+    clients_df = get_clients()
+    
+    if clients_df.empty:
+        st.warning("No clients found. Please create a client first in the Home page.")
+        return
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        selected_client_name = st.selectbox(
+            "Select Client",
+            clients_df['CLIENT_NAME'].tolist(),
+            key="meal_summary_client"
+        )
+        selected_client = clients_df[clients_df['CLIENT_NAME'] == selected_client_name].iloc[0]
+        client_id = selected_client['CLIENT_ID']
+    
+    with col2:
+        st.metric("Target Calories", f"{selected_client.get('target_calories', 2000)} kcal")
+    
+    st.divider()
+    
+    # Date range selector
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col1:
+        date_range_option = st.radio("Select Date Range", ["This Week", "This Month", "Custom Range"], key="meal_date_range")
+    
+    with col2:
+        if date_range_option == "This Week":
+            today = datetime.now().date()
+            # Get Monday of this week
+            start_date = today - timedelta(days=today.weekday())
+            end_date = start_date + timedelta(days=6)
+            st.write(f"**Start:** {start_date}")
+        elif date_range_option == "This Month":
+            today = datetime.now().date()
+            start_date = today.replace(day=1)
+            if today.month == 12:
+                end_date = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                end_date = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
+            st.write(f"**Start:** {start_date}")
+        else:
+            col_start, col_end = st.columns(2)
+            with col_start:
+                start_date = st.date_input("Start Date", value=datetime.now().date() - timedelta(days=7), key="meal_range_start")
+            with col_end:
+                end_date = st.date_input("End Date", value=datetime.now().date(), key="meal_range_end")
+            st.write(f"**Range:** {start_date} to {end_date}")
+    
+    with col3:
+        if date_range_option != "Custom Range":
+            if date_range_option == "This Month":
+                st.write(f"**End:** {end_date}")
+            else:
+                st.write(f"**End:** {end_date}")
+    
+    st.divider()
+    
+    # Fetch meal plans for the date range
+    meal_plans_df = get_client_meal_plans_by_date_range(client_id, start_date, end_date)
+    
+    if meal_plans_df.empty:
+        st.info(f"No meal plans found for {selected_client_name} in the selected date range.")
+    else:
+        # Summary statistics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total_plans = len(meal_plans_df)
+        avg_calories = meal_plans_df['TOTAL_CALORIES'].mean()
+        avg_protein = meal_plans_df['PROTEIN_G'].mean()
+        total_days_covered = meal_plans_df['DURATION_DAYS'].sum()
+        
+        col1.metric("Meal Plans", total_plans)
+        col2.metric("Avg Calories", f"{int(avg_calories)} kcal")
+        col3.metric("Avg Protein", f"{int(avg_protein)}g")
+        col4.metric("Total Days Covered", int(total_days_covered))
+        
+        st.divider()
+        
+        # Display macro distribution
+        st.markdown("### Macronutrient Distribution")
+        macro_data = {
+            'Nutrient': ['Protein', 'Carbs', 'Fat'],
+            'Grams': [
+                meal_plans_df['PROTEIN_G'].mean(),
+                meal_plans_df['CARBS_G'].mean(),
+                meal_plans_df['FAT_G'].mean()
+            ]
+        }
+        macro_df = pd.DataFrame(macro_data)
+        fig = px.pie(macro_df, values='Grams', names='Nutrient', title="Average Macro Split")
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.divider()
+        
+        # Detailed meal plans
+        st.markdown("### Meal Plans by Date")
+        
+        for _, meal_plan in meal_plans_df.iterrows():
+            plan_start = meal_plan.get('PLAN_START_DATE', 'N/A')
+            plan_end = plan_start + timedelta(days=meal_plan['DURATION_DAYS'] - 1) if plan_start != 'N/A' else 'N/A'
+            week_num = meal_plan['PLAN_WEEK']
+            
+            with st.expander(f"📅 Week {week_num} ({plan_start} - {plan_end}) | {meal_plan['TOTAL_CALORIES']} kcal", expanded=False):
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Calories", meal_plan['TOTAL_CALORIES'])
+                col2.metric("Protein", f"{meal_plan['PROTEIN_G']}g")
+                col3.metric("Carbs", f"{meal_plan['CARBS_G']}g")
+                col4.metric("Fat", f"{meal_plan['FAT_G']}g")
+                
+                st.divider()
+                
+                # Parse meal plan JSON
+                meal_plan_json = meal_plan.get('MEAL_PLAN_JSON')
+                if meal_plan_json:
+                    if isinstance(meal_plan_json, str):
+                        meal_plan_json = json.loads(meal_plan_json)
+                    
+                    days = meal_plan_json.get('days', [])
+                    for day in days:
+                        day_num = day.get('day', 0)
+                        st.markdown(f"**Day {day_num}**")
+                        
+                        meals = day.get('meals', [])
+                        for meal in meals:
+                            meal_type = meal.get('meal_type', 'meal').title()
+                            meal_cal = meal.get('calories', 0)
+                            meal_protein = meal.get('protein', 0)
+                            
+                            with st.expander(f"{meal_type} - {meal_cal} kcal, {meal_protein}g protein"):
+                                foods = meal.get('foods', [])
+                                for food in foods:
+                                    st.write(f"• {food}")
+        
+        st.divider()
+        
+        # Raw data table
+        st.markdown("### Raw Data")
+        st.dataframe(
+            meal_plans_df[['meal_plan_id', 'generation_date', 'plan_start_date', 'plan_week', 'total_calories', 'protein_g', 'carbs_g', 'fat_g']],
+            use_container_width=True,
+            hide_index=True
+        )
+
+# ============================================================================
 # Page: Client Profiles
 # ============================================================================
 
@@ -1028,8 +1369,8 @@ def main():
     
     page = st.sidebar.radio(
         "Navigation",
-        ["Home", "Workout Generator", "Meal Plan Generator", "Weight Tracking", "Client Profiles"],
-        # icons=["🏠", "💪", "🍽️", "⚖️", "👥"]
+        ["Home", "Workout Generator", "Meal Plan Generator", "Workout Summary", "Meal Plan Summary", "Weight Tracking", "Client Profiles"],
+        # icons=["🏠", "💪", "🍽️", "📊", "📊", "⚖️", "👥"]
     )
     
     st.sidebar.divider()
@@ -1050,6 +1391,10 @@ def main():
         page_workout_generator()
     elif page == "Meal Plan Generator":
         page_meal_plan_generator()
+    elif page == "Workout Summary":
+        page_workout_summary()
+    elif page == "Meal Plan Summary":
+        page_meal_plan_summary()
     elif page == "Weight Tracking":
         page_weight_tracking()
     elif page == "Client Profiles":

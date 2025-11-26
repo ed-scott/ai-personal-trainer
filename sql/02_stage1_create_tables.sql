@@ -106,9 +106,10 @@ GRANT SELECT ON exercises_library TO ROLE TRAINING_APP_ROLE;
 -- Table 5: GENERATED_WORKOUTS - AI-Generated Workouts
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS generated_workouts (
+CREATE OR REPLACE TABLE generated_workouts (
   workout_id VARCHAR(36) DEFAULT TO_VARCHAR(UUID_STRING()) NOT NULL,
   client_id VARCHAR(36) NOT NULL,
+  workout_date DATE COMMENT 'Scheduled date for this workout',
   generation_date TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
   workout_week NUMBER(2,0) NOT NULL COMMENT 'Week number in the plan',
   workout_day NUMBER(1,0) NOT NULL COMMENT 'Day of week (1-7)',
@@ -158,9 +159,10 @@ GRANT SELECT, INSERT ON recipes TO ROLE TRAINING_APP_ROLE;
 -- Table 7: MEAL_PLANS - AI-Generated Meal Plans
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS meal_plans (
+CREATE OR REPLACE TABLE meal_plans (
   meal_plan_id VARCHAR(36) DEFAULT TO_VARCHAR(UUID_STRING()) NOT NULL,
   client_id VARCHAR(36) NOT NULL,
+  plan_start_date DATE COMMENT 'Scheduled start date for this meal plan',
   generation_date TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
   plan_week NUMBER(2,0) NOT NULL COMMENT 'Week number of the meal plan',
   duration_days NUMBER(2,0) DEFAULT 7 COMMENT 'Number of days in the plan',

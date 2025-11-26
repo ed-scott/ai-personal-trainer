@@ -64,6 +64,7 @@ GRANT READ ON STAGE streamlit_app_stage TO ROLE TRAINING_APP_ADMIN;
 CREATE STREAMLIT IF NOT EXISTS training_db.public.ai_personal_trainer
   FROM @ai_personal_trainer_repo/branches/main/streamlit_app
   MAIN_FILE = 'app.py'
+  IMPORTS = ('requirements.txt')
   QUERY_WAREHOUSE = training_wh
   TITLE = 'AI Personal Trainer - Stage 1'
   COMMENT = 'Personalized Workout and Meal Plan Generation with Cortex Prompt Complete'
