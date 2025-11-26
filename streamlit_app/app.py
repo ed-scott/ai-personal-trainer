@@ -1027,7 +1027,7 @@ def page_workout_summary():
     col1, col2, col3 = st.columns([1, 1, 1])
     
     with col1:
-        date_range_option = st.radio("Select Date Range", ["This Week", "This Month", "Custom Range"])
+        date_range_option = st.radio("Select Date Range", ["This Week", "Next Week", "This Month", "Custom Range"])
     
     with col2:
         if date_range_option == "This Week":
@@ -1035,6 +1035,12 @@ def page_workout_summary():
             # Get Monday of this week
             start_date = today - timedelta(days=today.weekday())
             end_date = start_date + timedelta(days=6)
+            st.write(f"**Start:** {start_date}")
+        if date_range_option == "Next Week":
+            today = datetime.now().date()
+            # Get Monday of this week
+            start_date = today - timedelta(days=today.weekday()) + timedelta(days=7)
+            end_date = start_date + timedelta(days=13)
             st.write(f"**Start:** {start_date}")
         elif date_range_option == "This Month":
             today = datetime.now().date()
@@ -1169,7 +1175,7 @@ def page_meal_plan_summary():
     col1, col2, col3 = st.columns([1, 1, 1])
     
     with col1:
-        date_range_option = st.radio("Select Date Range", ["This Week", "This Month", "Custom Range"], key="meal_date_range")
+        date_range_option = st.radio("Select Date Range", ["This Week", "Next Week", "This Month", "Custom Range"], key="meal_date_range")
     
     with col2:
         if date_range_option == "This Week":
@@ -1177,6 +1183,12 @@ def page_meal_plan_summary():
             # Get Monday of this week
             start_date = today - timedelta(days=today.weekday())
             end_date = start_date + timedelta(days=6)
+            st.write(f"**Start:** {start_date}")
+        if date_range_option == "Next Week":
+            today = datetime.now().date()
+            # Get Monday of this week
+            start_date = today - timedelta(days=today.weekday()) + timedelta(days=7)
+            end_date = start_date + timedelta(days=13)
             st.write(f"**Start:** {start_date}")
         elif date_range_option == "This Month":
             today = datetime.now().date()
