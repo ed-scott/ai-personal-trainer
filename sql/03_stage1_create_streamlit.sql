@@ -16,7 +16,7 @@ USE SCHEMA PUBLIC;
 CREATE SECRET IF NOT EXISTS ai_personal_trainer_git_secret
   TYPE = 'PASSWORD'
   USERNAME = 'github'
-  PASSWORD = 'PLACEHOLDER_GITHUB_PAT_TOKEN'
+  PASSWORD = '<>'
   COMMENT = 'Git credentials for AI Personal Trainer Streamlit app repository'
 ;
 
@@ -31,15 +31,15 @@ GRANT READ ON SECRET ai_personal_trainer_git_secret TO ROLE TRAINING_APP_ADMIN;
 -- Create a Git repository reference for the Streamlit app
 -- NOTE: Replace PLACEHOLDER_REPO_URL with your actual repository URL
 CREATE GIT REPOSITORY IF NOT EXISTS ai_personal_trainer_repo
-  API_PROVIDER = 'GITHUB'
-  GIT_CREDENTIALS_SECRET = ai_personal_trainer_git_secret
+  API_INTEGRATION = snowflake_git_integration
+  GIT_CREDENTIALS = ai_personal_trainer_git_secret
   ORIGIN = 'https://github.com/ed-scott/ai-personal-trainer.git'
   COMMENT = 'Git repository for AI Personal Trainer Streamlit application'
 ;
 
 -- Grant repository privileges
-GRANT USAGE ON GIT REPOSITORY ai_personal_trainer_repo TO ROLE TRAINING_APP_ROLE;
-GRANT USAGE ON GIT REPOSITORY ai_personal_trainer_repo TO ROLE TRAINING_APP_ADMIN;
+GRANT READ ON GIT REPOSITORY ai_personal_trainer_repo TO ROLE TRAINING_APP_ROLE;
+GRANT READ ON GIT REPOSITORY ai_personal_trainer_repo TO ROLE TRAINING_APP_ADMIN;
 
 -- ============================================================================
 -- Create Internal Stage (Backup - Optional)
@@ -52,8 +52,8 @@ CREATE STAGE IF NOT EXISTS streamlit_app_stage
 ;
 
 -- Grant stage privileges
-GRANT USAGE ON STAGE streamlit_app_stage TO ROLE TRAINING_APP_ROLE;
-GRANT USAGE ON STAGE streamlit_app_stage TO ROLE TRAINING_APP_ADMIN;
+GRANT READ ON STAGE streamlit_app_stage TO ROLE TRAINING_APP_ROLE;
+GRANT READ ON STAGE streamlit_app_stage TO ROLE TRAINING_APP_ADMIN;
 
 -- ============================================================================
 -- Create Snowflake Native Streamlit App (Git Repository Method)
@@ -63,7 +63,7 @@ GRANT USAGE ON STAGE streamlit_app_stage TO ROLE TRAINING_APP_ADMIN;
 -- This uses the Git repository instead of internal stage
 CREATE STREAMLIT IF NOT EXISTS training_db.public.ai_personal_trainer
   FROM @ai_personal_trainer_repo/branches/main/streamlit_app
-  MAIN_FILE = '/streamlit_app/app.py'
+  MAIN_FILE = 'app.py'
   QUERY_WAREHOUSE = training_wh
   TITLE = 'AI Personal Trainer - Stage 1'
   COMMENT = 'Personalized Workout and Meal Plan Generation with Cortex Prompt Complete'

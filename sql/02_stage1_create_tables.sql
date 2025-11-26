@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS clients (
 )
 COMMENT = 'Client profiles with fitness goals and preferences for AI-generated workouts and meal plans';
 
-CREATE INDEX IF NOT EXISTS idx_clients_created ON clients (created_at DESC);
+--CREATE INDEX IF NOT EXISTS idx_clients_created ON clients (created_at DESC);
 GRANT SELECT, INSERT, UPDATE, DELETE ON clients TO ROLE TRAINING_APP_ROLE;
 
 -- ============================================================================
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS weigh_ins (
 )
 COMMENT = 'Weight tracking and body composition history for clients';
 
-CREATE INDEX IF NOT EXISTS idx_weighins_client_date ON weigh_ins (client_id, weigh_in_date DESC);
+--CREATE INDEX IF NOT EXISTS idx_weighins_client_date ON weigh_ins (client_id, weigh_in_date DESC);
 GRANT SELECT, INSERT, UPDATE, DELETE ON weigh_ins TO ROLE TRAINING_APP_ROLE;
 
 -- ============================================================================
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS body_measurements (
 )
 COMMENT = 'Detailed body measurements tracked over time';
 
-CREATE INDEX IF NOT EXISTS idx_body_meas_client_date ON body_measurements (client_id, measurement_date DESC);
+--CREATE INDEX IF NOT EXISTS idx_body_meas_client_date ON body_measurements (client_id, measurement_date DESC);
 GRANT SELECT, INSERT, UPDATE, DELETE ON body_measurements TO ROLE TRAINING_APP_ROLE;
 
 -- ============================================================================
@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS exercises_library (
 )
 COMMENT = 'Reference library of exercises for AI workout generation';
 
-CREATE INDEX IF NOT EXISTS idx_exercises_category ON exercises_library (category);
+--CREATE INDEX IF NOT EXISTS idx_exercises_category ON exercises_library (category);
 GRANT SELECT ON exercises_library TO ROLE TRAINING_APP_ROLE;
 
 -- ============================================================================
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS generated_workouts (
 )
 COMMENT = 'AI-generated workouts using Snowflake Cortex Prompt Complete';
 
-CREATE INDEX IF NOT EXISTS idx_workouts_client_week ON generated_workouts (client_id, workout_week);
+--CREATE INDEX IF NOT EXISTS idx_workouts_client_week ON generated_workouts (client_id, workout_week);
 GRANT SELECT, INSERT, UPDATE, DELETE ON generated_workouts TO ROLE TRAINING_APP_ROLE;
 
 -- ============================================================================
@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS recipes (
 )
 COMMENT = 'Recipe library for meal plan generation and suggestions';
 
-CREATE INDEX IF NOT EXISTS idx_recipes_name ON recipes (recipe_name);
+--CREATE INDEX IF NOT EXISTS idx_recipes_name ON recipes (recipe_name);
 GRANT SELECT, INSERT ON recipes TO ROLE TRAINING_APP_ROLE;
 
 -- ============================================================================
@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS meal_plans (
 )
 COMMENT = 'AI-generated meal plans using Snowflake Cortex Prompt Complete';
 
-CREATE INDEX IF NOT EXISTS idx_meal_plans_client_week ON meal_plans (client_id, plan_week);
+--CREATE INDEX IF NOT EXISTS idx_meal_plans_client_week ON meal_plans (client_id, plan_week);
 GRANT SELECT, INSERT, UPDATE, DELETE ON meal_plans TO ROLE TRAINING_APP_ROLE;
 
 -- ============================================================================
@@ -194,17 +194,4 @@ FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = 'PUBLIC'
   AND TABLE_CATALOG = 'TRAINING_DB'
   AND TABLE_TYPE = 'BASE TABLE'
-ORDER BY TABLE_NAME;
-
--- Verify foreign key relationships
-SELECT
-  CONSTRAINT_NAME,
-  TABLE_NAME,
-  COLUMN_NAME,
-  REFERENCED_TABLE_NAME,
-  REFERENCED_COLUMN_NAME
-FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
-WHERE TABLE_SCHEMA = 'PUBLIC'
-  AND TABLE_CATALOG = 'TRAINING_DB'
-  AND CONSTRAINT_TYPE = 'FOREIGN KEY'
 ORDER BY TABLE_NAME;
