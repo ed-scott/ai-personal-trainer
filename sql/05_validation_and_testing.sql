@@ -48,14 +48,13 @@ ORDER BY TABLE_NAME, CONSTRAINT_NAME;
 
 -- Insert sample trainer
 INSERT INTO TRAINERS (trainer_id, name, email, phone, bio, certifications)
-VALUES (
+SELECT
   'trainer_001',
   'John Smith',
   'john.smith@example.com',
   '555-0001',
   'Certified personal trainer with 10 years of experience',
-  PARSE_JSON('["NASM", "ACE", "ISSF"]')
-);
+  PARSE_JSON('[\"NASM\", \"ACE\", \"ISSF\"]');
 
 -- Insert sample client
 INSERT INTO CLIENTS (client_id, first_name, last_name, email, phone, dob, gender, timezone)
@@ -72,31 +71,11 @@ VALUES (
 
 -- Insert sample exercises
 INSERT INTO EXERCISES (exercise_id, name, category, primary_muscles, instructions, equipment)
-VALUES
-  (
-    'exe_001',
-    'Barbell Squat',
-    'strength',
-    PARSE_JSON('["quadriceps", "glutes", "hamstrings"]'),
-    'Stand with feet shoulder-width apart, lower body by bending knees and hips',
-    'Barbell'
-  ),
-  (
-    'exe_002',
-    'Bench Press',
-    'strength',
-    PARSE_JSON('["chest", "shoulders", "triceps"]'),
-    'Lie on flat bench, push weight away from chest',
-    'Barbell'
-  ),
-  (
-    'exe_003',
-    'Running',
-    'cardio',
-    PARSE_JSON('["legs", "cardiovascular"]'),
-    'Sustained aerobic running',
-    'None'
-  );
+SELECT 'exe_001', 'Barbell Squat', 'strength', PARSE_JSON('["quadriceps", "glutes", "hamstrings"]'), 'Stand with feet shoulder-width apart, lower body by bending knees and hips', 'Barbell'
+UNION ALL
+SELECT 'exe_002', 'Bench Press', 'strength', PARSE_JSON('["chest", "shoulders", "triceps"]'), 'Lie on flat bench, push weight away from chest', 'Barbell'
+UNION ALL
+SELECT 'exe_003', 'Running', 'cardio', PARSE_JSON('["legs", "cardiovascular"]'), 'Sustained aerobic running', 'None';
 
 -- Insert sample workout
 INSERT INTO WORKOUTS (workout_id, client_id, trainer_id, date, start_time, type, notes)
@@ -181,7 +160,7 @@ VALUES (
 -- Insert sample recipe
 INSERT INTO RECIPES 
   (recipe_id, name, servings, total_calories, macronutrients, ingredients, steps, tags, prep_time_min, cook_time_min, created_by)
-VALUES (
+SELECT
   'recipe_001',
   'Grilled Chicken Breast with Vegetables',
   1,
@@ -192,13 +171,12 @@ VALUES (
   PARSE_JSON('["high_protein", "low_carb", "healthy"]'),
   5,
   15,
-  'trainer_001'
-);
+  'trainer_001';
 
 -- Insert nutrition log
 INSERT INTO NUTRITION_LOGS 
   (log_id, client_id, date, meal_time, recipe_id, calories, macros, raw_entry)
-VALUES (
+SELECT
   'nl_001',
   'client_001',
   CURRENT_DATE,
@@ -206,13 +184,12 @@ VALUES (
   'recipe_001',
   450,
   PARSE_JSON('{"protein": 45, "carbs": 30, "fat": 12}'),
-  'Lunch: Grilled chicken with broccoli'
-);
+  'Lunch: Grilled chicken with broccoli';
 
 -- Insert meal plan
 INSERT INTO MEAL_PLANS 
   (meal_plan_id, client_id, trainer_id, name, start_date, end_date, goals, metadata)
-VALUES (
+SELECT
   'mp_001',
   'client_001',
   'trainer_001',
@@ -220,21 +197,19 @@ VALUES (
   CURRENT_DATE,
   DATEADD(WEEK, 1, CURRENT_DATE),
   PARSE_JSON('{"target_daily_calories": 1800, "target_protein_g": 150}'),
-  PARSE_JSON('{"priority": "weight_loss", "restrictions": ["gluten_free"]}')
-);
+  PARSE_JSON('{"priority": "weight_loss", "restrictions": ["gluten_free"]}');
 
 -- Insert training program
 INSERT INTO TRAINING_PROGRAMS 
   (program_id, name, client_id, trainer_id, duration_weeks, description, structure)
-VALUES (
+SELECT
   'tp_001',
   'Full Body Strength - 8 Weeks',
   'client_001',
   'trainer_001',
   8,
   'Progressive strength training program focused on compound movements',
-  PARSE_JSON('{"weeks": [{"week": 1, "focus": "technique"}, {"week": 2, "focus": "hypertrophy"}]}')
-);
+  PARSE_JSON('{"weeks": [{"week": 1, "focus": "technique"}, {"week": 2, "focus": "hypertrophy"}]}');
 
 -- Insert training session
 INSERT INTO SESSIONS 
