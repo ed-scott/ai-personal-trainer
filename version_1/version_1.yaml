@@ -1,0 +1,438 @@
+# AI Personal Trainer - Streamlit Native (Snowflake) manifest
+# Purpose: schema + deployment + integration settings to build the app
+
+app:
+  name: ai_personal_trainer
+  description: >-
+    AI-powered personal training app hosted in Snowflake (Streamlit Native).
+    Stores workouts, running sessions, meal plans/recipes, weigh-ins, measurements,
+    training programs, notes, and AI artifacts (embeddings, prompts).
+  version: 0.1.0
+
+deployment:
+  platform: snowflake_streamlit_native
+  streamlit:
+    entrypoint: app.py
+    main_module: app.main
+    requirements:
+      - streamlit>=1.20
+      - pandas
+      - numpy
+      - scikit-learn
+      - sqlalchemy
+      - snowflake-connector-python
+      - snowflake-snowpark-python
+      - openai
+      - sentence-transformers
+    env_secrets:
+      - SNOWFLAKE_ACCOUNT
+      - SNOWFLAKE_USER
+      - SNOWFLAKE_PASSWORD
+      - SNOWFLAKE_ROLE
+      - SNOWFLAKE_WAREHOUSE
+      - SNOWFLAKE_DATABASE
+      - SNOWFLAKE_SCHEMA
+      - OPENAI_API_KEY
+    streamlit_settings:
+      theme: light
+      show_spinner: true
+  
+  streamlit_input_forms:
+    description: "Forms for manual input of suggested and actual workout/run data via Streamlit UI"
+    
+    weigh_in_form:
+      - label: "Client"
+        field: client_id
+        type: selectbox
+      - label: "Date"
+        field: date
+        type: date_input
+      - label: "Weight (kg)"
+        field: weight_kg
+        type: number_input
+        required: true
+      - label: "Body Fat %"
+        field: body_fat_pct
+        type: number_input
+        required: false
+      - label: "Muscle Mass (kg)"
+        field: muscle_mass_kg
+        type: number_input
+        required: false
+      - label: "Notes"
+        field: notes
+        type: text_area
+        required: false
+      - label: "Entry Source"
+        field: entry_source
+        type: selectbox
+        options: ["manual", "device", "import"]
+    
+    running_session_form:
+      suggested:
+        - label: "Suggested Distance (km)"
+          field: suggested_distance_km
+          type: number_input
+          format: "%.3f"
+        - label: "Suggested Pace (sec/km)"
+          field: suggested_pace_sec_per_km
+          type: number_input
+          format: "%.2f"
+        - label: "Suggested Run Type"
+          field: suggested_type
+          type: selectbox
+          options: ["easy", "tempo", "intervals", "long", "recovery", "speed_work"]
+      actual:
+        - label: "Actual Distance (km)"
+          field: actual_distance_km
+          type: number_input
+          format: "%.3f"
+          required: true
+        - label: "Actual Duration (seconds)"
+          field: actual_duration_sec
+          type: number_input
+          format: "%d"
+          required: true
+        - label: "Actual Pace (sec/km)"
+          field: actual_pace_sec_per_km
+          type: number_input
+          format: "%.2f"
+          computed_from: "actual_duration_sec / actual_distance_km"
+        - label: "Actual Run Type"
+          field: actual_type
+          type: selectbox
+          options: ["easy", "tempo", "intervals", "long", "recovery", "speed_work"]
+        - label: "Calories"
+          field: calories
+          type: number_input
+          required: false
+        - label: "Device"
+          field: device
+          type: text_input
+          required: false
+        - label: "Notes"
+          field: notes
+          type: text_area
+          required: false
+    
+    workout_exercise_form:
+      suggested:
+        - label: "Suggested Sets"
+          field: suggested_sets
+          type: number_input
+          format: "%d"
+        - label: "Suggested Reps"
+          field: suggested_reps
+          type: text_input
+          placeholder: "e.g., '8-12' or 'AMRAP'"
+        - label: "Suggested Weight (kg)"
+          field: suggested_weight_kg
+          type: number_input
+          format: "%.2f"
+      actual:
+        - label: "Actual Sets"
+          field: actual_sets
+          type: number_input
+          format: "%d"
+          required: true
+        - label: "Actual Reps"
+          field: actual_reps
+          type: text_input
+          placeholder: "e.g., '8-12' or '10'"
+          required: true
+        - label: "Actual Weight (kg)"
+          field: actual_weight_kg
+          type: number_input
+          format: "%.2f"
+          required: true
+        - label: "RPE (Rate of Perceived Exertion)"
+          field: rpe
+          type: slider
+          min_value: 1
+          max_value: 10
+          required: false
+        - label: "Notes"
+          field: notes
+          type: text_area
+          required: false
+
+snowflake:
+  account: ${SNOWFLAKE_ACCOUNT}
+  user: ${SNOWFLAKE_USER}
+  role: ${SNOWFLAKE_ROLE}
+  warehouse: ${SNOWFLAKE_WAREHOUSE}
+  database: ${SNOWFLAKE_DATABASE:TRAINING_DB}
+  schema: ${SNOWFLAKE_SCHEMA:PUBLIC}
+  objects:
+    stages:
+      - name: raw_csv_stage
+        type: internal
+        comment: "stage for uploading CSV/JSON data for ingestion"
+    file_formats:
+      - name: json_format
+        type: json
+
+data_model:
+  description: Snowflake table definitions and recommended column types
+  tables:
+    clients:
+      columns:
+        client_id: {type: VARCHAR(36), pk: true, comment: "UUID"}
+        first_name: {type: VARCHAR(100)}
+        last_name: {type: VARCHAR(100)}
+        email: {type: VARCHAR(255)}
+        phone: {type: VARCHAR(50)}
+        dob: {type: DATE}
+        gender: {type: VARCHAR(32)}
+        timezone: {type: VARCHAR(64)}
+        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+        metadata: {type: VARIANT, comment: "free-form metadata JSON"}
+      comment: "Clients / members managed by personal trainers"
+
+    trainers:
+      columns:
+        trainer_id: {type: VARCHAR(36), pk: true}
+        name: {type: VARCHAR(200)}
+        email: {type: VARCHAR(255)}
+        phone: {type: VARCHAR(50)}
+        bio: {type: VARCHAR(2000)}
+        certifications: {type: VARIANT}
+        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+
+    workouts:
+      columns:
+        workout_id: {type: VARCHAR(36), pk: true}
+        client_id: {type: VARCHAR(36), fk: clients.client_id}
+        trainer_id: {type: VARCHAR(36), fk: trainers.trainer_id}
+        program_id: {type: VARCHAR(36), nullable: true}
+        date: {type: DATE}
+        start_time: {type: TIMESTAMP_LTZ}
+        type: {type: VARCHAR(50), comment: "gym|run|cycling|swim|other"}
+        notes: {type: VARCHAR(2000)}
+        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+        metadata: {type: VARIANT}
+      comment: "Top-level workout sessions. Suggested/actual exercise data stored in workout_exercises table."
+
+    workout_exercises:
+      columns:
+        id: {type: VARCHAR(36), pk: true}
+        workout_id: {type: VARCHAR(36), fk: workouts.workout_id}
+        exercise_id: {type: VARCHAR(36), fk: exercises.exercise_id}
+        order_index: {type: NUMBER}
+        suggested_sets: {type: NUMBER, nullable: true, comment: "AI-suggested sets"}
+        suggested_reps: {type: VARCHAR(50), nullable: true, comment: "AI-suggested reps (e.g., '8-12' or 'AMRAP')"}
+        suggested_weight_kg: {type: NUMBER(8,2), nullable: true, comment: "AI-suggested weight in kg"}
+        actual_sets: {type: NUMBER, nullable: true, comment: "Actual completed sets (input via Streamlit)"}
+        actual_reps: {type: VARCHAR(50), nullable: true, comment: "Actual completed reps"}
+        actual_weight_kg: {type: NUMBER(8,2), nullable: true, comment: "Actual used weight in kg"}
+        rpe: {type: NUMBER(3,1), nullable: true, comment: "Rate of Perceived Exertion for the exercise"}
+        notes: {type: VARCHAR(1000)}
+
+    exercises:
+      columns:
+        exercise_id: {type: VARCHAR(36), pk: true}
+        name: {type: VARCHAR(200)}
+        category: {type: VARCHAR(100), comment: "strength|cardio|mobility"}
+        primary_muscles: {type: VARIANT}
+        instructions: {type: VARCHAR(4000)}
+        equipment: {type: VARCHAR(200)}
+        video_url: {type: VARCHAR(2000)}
+        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+
+    running_sessions:
+      columns:
+        run_id: {type: VARCHAR(36), pk: true}
+        client_id: {type: VARCHAR(36), fk: clients.client_id}
+        trainer_id: {type: VARCHAR(36), nullable: true}
+        date: {type: DATE}
+        suggested_distance_km: {type: NUMBER(8,3), nullable: true, comment: "AI-suggested target distance"}
+        suggested_pace_sec_per_km: {type: NUMBER(8,2), nullable: true, comment: "AI-suggested target pace"}
+        suggested_type: {type: VARCHAR(100), nullable: true, comment: "AI-suggested run type (easy, tempo, intervals, long, etc.)"}
+        actual_distance_km: {type: NUMBER(8,3), nullable: true, comment: "Actual completed distance (input via Streamlit)"}
+        actual_duration_sec: {type: NUMBER, nullable: true, comment: "Actual completed duration in seconds"}
+        actual_pace_sec_per_km: {type: NUMBER(8,2), nullable: true, comment: "Actual average pace"}
+        actual_type: {type: VARCHAR(100), nullable: true, comment: "Actual run type as performed"}
+        calories: {type: NUMBER(8,2), nullable: true}
+        route_geojson: {type: VARIANT, nullable: true, comment: "store GeoJSON points if available"}
+        device: {type: VARCHAR(200), nullable: true}
+        notes: {type: VARCHAR(2000), nullable: true}
+
+    meal_plans:
+      columns:
+        meal_plan_id: {type: VARCHAR(36), pk: true}
+        client_id: {type: VARCHAR(36), fk: clients.client_id}
+        trainer_id: {type: VARCHAR(36), nullable: true}
+        name: {type: VARCHAR(200)}
+        start_date: {type: DATE}
+        end_date: {type: DATE}
+        goals: {type: VARIANT}
+        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+        metadata: {type: VARIANT}
+
+    recipes:
+      columns:
+        recipe_id: {type: VARCHAR(36), pk: true}
+        name: {type: VARCHAR(300)}
+        servings: {type: NUMBER}
+        total_calories: {type: NUMBER}
+        macronutrients: {type: VARIANT, comment: "{protein:.., carbs:.., fat:..}"}
+        ingredients: {type: VARIANT, comment: "array of ingredient objects"}
+        steps: {type: VARIANT}
+        tags: {type: VARIANT}
+        prep_time_min: {type: NUMBER}
+        cook_time_min: {type: NUMBER}
+        created_by: {type: VARCHAR(36)}
+        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+
+    recipe_ingredients:
+      columns:
+        id: {type: VARCHAR(36), pk: true}
+        recipe_id: {type: VARCHAR(36), fk: recipes.recipe_id}
+        name: {type: VARCHAR(300)}
+        quantity: {type: VARCHAR(100)}
+        calories: {type: NUMBER, nullable: true}
+
+    weigh_ins:
+      columns:
+        weigh_in_id: {type: VARCHAR(36), pk: true}
+        client_id: {type: VARCHAR(36), fk: clients.client_id}
+        date: {type: DATE}
+        weight_kg: {type: NUMBER(7,3)}
+        body_fat_pct: {type: NUMBER(5,2), nullable: true}
+        muscle_mass_kg: {type: NUMBER(7,3), nullable: true}
+        notes: {type: VARCHAR(1000)}
+        recorded_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+        entry_source: {type: VARCHAR(50), comment: "manual|device|import"}
+        entered_by: {type: VARCHAR(36), comment: "who entered the weigh-in (client_id or trainer_id)"}
+
+    body_measurements:
+      columns:
+        measurement_id: {type: VARCHAR(36), pk: true}
+        client_id: {type: VARCHAR(36), fk: clients.client_id}
+        date: {type: DATE}
+        neck_cm: {type: NUMBER(6,2)}
+        chest_cm: {type: NUMBER(6,2)}
+        waist_cm: {type: NUMBER(6,2)}
+        hip_cm: {type: NUMBER(6,2)}
+        thigh_cm: {type: NUMBER(6,2)}
+        calf_cm: {type: NUMBER(6,2)}
+        recorded_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+
+    training_programs:
+      columns:
+        program_id: {type: VARCHAR(36), pk: true}
+        name: {type: VARCHAR(300)}
+        client_id: {type: VARCHAR(36), nullable: true}
+        trainer_id: {type: VARCHAR(36), nullable: true}
+        duration_weeks: {type: NUMBER}
+        description: {type: VARCHAR(2000)}
+        structure: {type: VARIANT, comment: "hierarchical program JSON"}
+        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+
+    sessions:
+      columns:
+        session_id: {type: VARCHAR(36), pk: true}
+        client_id: {type: VARCHAR(36), fk: clients.client_id}
+        trainer_id: {type: VARCHAR(36), fk: trainers.trainer_id}
+        start_time: {type: TIMESTAMP_LTZ}
+        end_time: {type: TIMESTAMP_LTZ}
+        session_type: {type: VARCHAR(100)}
+        notes: {type: VARCHAR(4000)}
+
+    nutrition_logs:
+      columns:
+        log_id: {type: VARCHAR(36), pk: true}
+        client_id: {type: VARCHAR(36), fk: clients.client_id}
+        date: {type: DATE}
+        meal_time: {type: TIMESTAMP_LTZ}
+        recipe_id: {type: VARCHAR(36), nullable: true}
+        calories: {type: NUMBER}
+        macros: {type: VARIANT}
+        raw_entry: {type: VARCHAR(4000)}
+
+    ai_embeddings:
+      columns:
+        id: {type: VARCHAR(36), pk: true}
+        source_table: {type: VARCHAR(200)}
+        source_id: {type: VARCHAR(36)}
+        embedding: {type: VARIANT, comment: "vector or array stored as VARIANT"}
+        model: {type: VARCHAR(200)}
+        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+      comment: "Store embeddings used for similarity search and AI features"
+
+pipelines:
+  ingestion:
+    # Weigh-ins are entered manually via the Streamlit UI. If you want to
+    # support CSV/device ingestion later, add a separate ingest task that
+    # writes to a staging table and validates entries before inserting into
+    # the canonical `weigh_ins` table.
+
+  transforms:
+    - name: daily_aggregate_metrics
+      schedule: "USING CRON 0 2 * * * UTC"
+      task: |
+        -- Example: aggregate daily client activity metrics into a materialized view or table
+        CREATE OR REPLACE TABLE daily_client_metrics AS
+        SELECT client_id, DATE(start_time) AS day, COUNT(DISTINCT workout_id) AS workouts_count,
+               SUM(duration_min) AS total_minutes
+        FROM ${SNOWFLAKE_DATABASE}.${SNOWFLAKE_SCHEMA}.workouts
+        GROUP BY client_id, DATE(start_time);
+
+ai_integration:
+  features:
+    - name: workout_generator
+      description: "Generate a workout plan given client goals and constraints"
+      inputs: [client_profile, goals, equipment, program_history]
+      outputs: [workout_plan JSON]
+    - name: mealplan_generator
+      description: "Generate meal plans & recipes aligned to macros and preferences"
+      inputs: [client_profile, goals, allergies]
+      outputs: [meal_plan JSON]
+    - name: progress_predictor
+      description: "Predict likely progress trajectory from historical data"
+      inputs: [weigh_ins, training_load, nutrition_logs, sleep_hours]
+      outputs: [predicted_weight, confidence]
+
+  model_store:
+    default_model: openai-gpt
+    openai:
+      model: gpt-4o
+      temperature: 0.2
+      max_tokens: 1024
+
+vector_search:
+  embeddings_table: ${SNOWFLAKE_DATABASE}.${SNOWFLAKE_SCHEMA}.ai_embeddings
+  embedding_source: sentence-transformers/all-mpnet-base-v2
+  notes: "Store embeddings in VARIANT or a vector-enabled column if available in your Snowflake account."
+
+security:
+  recommended_roles:
+    - TRAINING_APP_ROLE
+    - TRAINING_APP_ADMIN
+  grants:
+    - role: TRAINING_APP_ROLE
+      privileges:
+        - USAGE: [warehouse, database, schema]
+        - SELECT/INSERT/UPDATE/DELETE: [tables listed in data_model]
+
+observability:
+  logging:
+    - destination: snowflake_table
+      table: app_logs
+  metrics:
+    - name: active_clients_daily
+      query: |
+        SELECT COUNT(DISTINCT client_id) FROM ${SNOWFLAKE_DATABASE}.${SNOWFLAKE_SCHEMA}.sessions
+        WHERE DATE(start_time) = CURRENT_DATE();
+
+notes_and_next_steps:
+  - "Replace placeholder env values with secure secret bindings in Streamlit Native deployment."
+  - "Weigh-ins are collected manually through the Streamlit UI by default (no CSV ingestion)."
+  - "All suggested vs actual values use standard data types (NUMBER, VARCHAR) -- no VARIANT fields for performance and schema clarity."
+  - "Create Snowflake roles/warehouses/database and run CREATE TABLE statements derived from the `data_model` section."
+  - "Implement `app.py` using the form specifications in `deployment.streamlit_input_forms` to build Streamlit UI pages: Clients, Workouts, Running Sessions, Meal Plans, Weigh-ins, Analytics, AI Tools."
+  - "For workout exercises: trainers provide AI-suggested values (sets/reps/weight), clients input actual values via Streamlit form."
+  - "For running sessions: generate AI-suggested runs (distance/pace/type), clients log actual performance (distance/duration/pace/type)."
+  - "Add a periodic Snowflake Task to refresh AI embeddings after new content is added."
+  - "Consider using Snowflake Vector Search (if available) for fast similarity lookups or store embeddings in `ai_embeddings`."
+  - "Add CI pipeline for building / testing and deploying Streamlit Native app to Snowflake." 

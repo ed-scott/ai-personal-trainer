@@ -1,13 +1,20 @@
 # AI Personal Trainer - Streamlit Native (Snowflake) manifest
-# Purpose: schema + deployment + integration settings to build the app
+# Purpose: schema + deployment + integration settings for AI-generated workout & meal plans
+# Stage 1: Personalized workout and meal plan generation using Cortex Prompt Complete
 
 app:
-  name: ai_personal_trainer
+  name: ai_personal_trainer_stage1
   description: >-
     AI-powered personal training app hosted in Snowflake (Streamlit Native).
-    Stores workouts, running sessions, meal plans/recipes, weigh-ins, measurements,
-    training programs, notes, and AI artifacts (embeddings, prompts).
+    Stage 1 focuses on personalized workout and meal plan generation using Cortex Prompt Complete.
+    Stores client profiles, generated workouts, meal plans/recipes, weigh-ins, and measurements.
   version: 0.1.0
+  stage: 1
+  features:
+    - Automatic workout generation via Cortex Prompt Complete
+    - Personalized meal plan generation
+    - Client profile management
+    - Weight tracking and body measurements
 
 deployment:
   platform: snowflake_streamlit_native
@@ -22,8 +29,6 @@ deployment:
       - sqlalchemy
       - snowflake-connector-python
       - snowflake-snowpark-python
-      - openai
-      - sentence-transformers
     env_secrets:
       - SNOWFLAKE_ACCOUNT
       - SNOWFLAKE_USER
@@ -32,129 +37,150 @@ deployment:
       - SNOWFLAKE_WAREHOUSE
       - SNOWFLAKE_DATABASE
       - SNOWFLAKE_SCHEMA
-      - OPENAI_API_KEY
     streamlit_settings:
       theme: light
       show_spinner: true
   
   streamlit_input_forms:
-    description: "Forms for manual input of suggested and actual workout/run data via Streamlit UI"
+    description: "Forms for client profile and manual weigh-in data entry"
+    
+    client_profile_form:
+      - label: "Client Name"
+        field: client_name
+        type: text_input
+        required: true
+      - label: "Age"
+        field: age
+        type: number_input
+        min_value: 18
+        max_value: 100
+        required: true
+      - label: "Gender"
+        field: gender
+        type: selectbox
+        options: ["Male", "Female", "Other"]
+        required: true
+      - label: "Current Weight (kg)"
+        field: current_weight_kg
+        type: number_input
+        format: "%.2f"
+        required: true
+      - label: "Height (cm)"
+        field: height_cm
+        type: number_input
+        format: "%d"
+        required: true
+      - label: "Fitness Level"
+        field: fitness_level
+        type: selectbox
+        options: ["Beginner", "Intermediate", "Advanced"]
+        required: true
+      - label: "Fitness Goals"
+        field: fitness_goals
+        type: multiselect
+        options: ["Weight Loss", "Muscle Gain", "Endurance", "Strength", "General Fitness", "Flexibility"]
+        required: true
+      - label: "Available Equipment"
+        field: available_equipment
+        type: multiselect
+        options: ["Dumbbells", "Barbell", "Gym Machine", "Cardio Equipment", "Bodyweight Only", "Resistance Bands"]
+        required: true
+      - label: "Days Available per Week"
+        field: days_per_week
+        type: number_input
+        min_value: 1
+        max_value: 7
+        format: "%d"
+        required: true
+      - label: "Workout Duration (minutes)"
+        field: workout_duration_min
+        type: number_input
+        min_value: 15
+        max_value: 180
+        format: "%d"
+        required: true
+      - label: "Dietary Preferences"
+        field: dietary_preferences
+        type: multiselect
+        options: ["Vegetarian", "Vegan", "Keto", "Paleo", "Mediterranean", "None"]
+        required: false
+      - label: "Allergies / Restrictions"
+        field: allergies
+        type: text_area
+        placeholder: "e.g., nuts, dairy, gluten"
+        required: false
+      - label: "Caloric Target (kcal/day)"
+        field: target_calories
+        type: number_input
+        min_value: 1200
+        max_value: 5000
+        format: "%d"
+        required: false
+      - label: "Protein Target (g/day)"
+        field: target_protein_g
+        type: number_input
+        min_value: 50
+        max_value: 300
+        format: "%d"
+        required: false
     
     weigh_in_form:
-      - label: "Client"
-        field: client_id
-        type: selectbox
       - label: "Date"
-        field: date
+        field: weigh_in_date
         type: date_input
+        required: true
       - label: "Weight (kg)"
         field: weight_kg
         type: number_input
+        format: "%.2f"
         required: true
       - label: "Body Fat %"
         field: body_fat_pct
         type: number_input
-        required: false
-      - label: "Muscle Mass (kg)"
-        field: muscle_mass_kg
-        type: number_input
+        min_value: 5
+        max_value: 50
+        format: "%.1f"
         required: false
       - label: "Notes"
         field: notes
         type: text_area
         required: false
-      - label: "Entry Source"
-        field: entry_source
-        type: selectbox
-        options: ["manual", "device", "import"]
     
-    running_session_form:
-      suggested:
-        - label: "Suggested Distance (km)"
-          field: suggested_distance_km
-          type: number_input
-          format: "%.3f"
-        - label: "Suggested Pace (sec/km)"
-          field: suggested_pace_sec_per_km
-          type: number_input
-          format: "%.2f"
-        - label: "Suggested Run Type"
-          field: suggested_type
-          type: selectbox
-          options: ["easy", "tempo", "intervals", "long", "recovery", "speed_work"]
-      actual:
-        - label: "Actual Distance (km)"
-          field: actual_distance_km
-          type: number_input
-          format: "%.3f"
-          required: true
-        - label: "Actual Duration (seconds)"
-          field: actual_duration_sec
-          type: number_input
-          format: "%d"
-          required: true
-        - label: "Actual Pace (sec/km)"
-          field: actual_pace_sec_per_km
-          type: number_input
-          format: "%.2f"
-          computed_from: "actual_duration_sec / actual_distance_km"
-        - label: "Actual Run Type"
-          field: actual_type
-          type: selectbox
-          options: ["easy", "tempo", "intervals", "long", "recovery", "speed_work"]
-        - label: "Calories"
-          field: calories
-          type: number_input
-          required: false
-        - label: "Device"
-          field: device
-          type: text_input
-          required: false
-        - label: "Notes"
-          field: notes
-          type: text_area
-          required: false
-    
-    workout_exercise_form:
-      suggested:
-        - label: "Suggested Sets"
-          field: suggested_sets
-          type: number_input
-          format: "%d"
-        - label: "Suggested Reps"
-          field: suggested_reps
-          type: text_input
-          placeholder: "e.g., '8-12' or 'AMRAP'"
-        - label: "Suggested Weight (kg)"
-          field: suggested_weight_kg
-          type: number_input
-          format: "%.2f"
-      actual:
-        - label: "Actual Sets"
-          field: actual_sets
-          type: number_input
-          format: "%d"
-          required: true
-        - label: "Actual Reps"
-          field: actual_reps
-          type: text_input
-          placeholder: "e.g., '8-12' or '10'"
-          required: true
-        - label: "Actual Weight (kg)"
-          field: actual_weight_kg
-          type: number_input
-          format: "%.2f"
-          required: true
-        - label: "RPE (Rate of Perceived Exertion)"
-          field: rpe
-          type: slider
-          min_value: 1
-          max_value: 10
-          required: false
-        - label: "Notes"
-          field: notes
-          type: text_area
-          required: false
+    body_measurements_form:
+      - label: "Date"
+        field: measurement_date
+        type: date_input
+        required: true
+      - label: "Neck (cm)"
+        field: neck_cm
+        type: number_input
+        format: "%.1f"
+        required: false
+      - label: "Chest (cm)"
+        field: chest_cm
+        type: number_input
+        format: "%.1f"
+        required: false
+      - label: "Waist (cm)"
+        field: waist_cm
+        type: number_input
+        format: "%.1f"
+        required: false
+      - label: "Hip (cm)"
+        field: hip_cm
+        type: number_input
+        format: "%.1f"
+        required: false
+      - label: "Thigh (cm)"
+        field: thigh_cm
+        type: number_input
+        format: "%.1f"
+        required: false
+      - label: "Calf (cm)"
+        field: calf_cm
+        type: number_input
+        format: "%.1f"
+        required: false
 
 snowflake:
   account: ${SNOWFLAKE_ACCOUNT}
@@ -165,151 +191,54 @@ snowflake:
   schema: ${SNOWFLAKE_SCHEMA:PUBLIC}
   objects:
     stages:
-      - name: raw_csv_stage
+      - name: streamlit_app_stage
         type: internal
-        comment: "stage for uploading CSV/JSON data for ingestion"
+        directory_enabled: true
+        comment: "Stage for Streamlit app files"
     file_formats:
       - name: json_format
         type: json
 
 data_model:
-  description: Snowflake table definitions and recommended column types
+  description: Snowflake table definitions for Stage 1 - Clients, Meal Plans, and Weight Tracking
   tables:
     clients:
       columns:
         client_id: {type: VARCHAR(36), pk: true, comment: "UUID"}
-        first_name: {type: VARCHAR(100)}
-        last_name: {type: VARCHAR(100)}
-        email: {type: VARCHAR(255)}
-        phone: {type: VARCHAR(50)}
-        dob: {type: DATE}
-        gender: {type: VARCHAR(32)}
-        timezone: {type: VARCHAR(64)}
+        client_name: {type: VARCHAR(100), nullable: false}
+        age: {type: NUMBER(3,0), nullable: false}
+        gender: {type: VARCHAR(20), nullable: false}
+        current_weight_kg: {type: NUMBER(7,2), nullable: false}
+        height_cm: {type: NUMBER(5,0), nullable: false}
+        fitness_level: {type: VARCHAR(50), nullable: false, comment: "Beginner|Intermediate|Advanced"}
+        fitness_goals: {type: VARIANT, nullable: false, comment: "JSON array of goals"}
+        available_equipment: {type: VARIANT, nullable: false, comment: "JSON array of equipment"}
+        days_per_week: {type: NUMBER(1,0), nullable: false, comment: "1-7 days"}
+        workout_duration_min: {type: NUMBER(3,0), nullable: false, comment: "minutes per session"}
+        dietary_preferences: {type: VARIANT, comment: "JSON array of preferences"}
+        allergies: {type: VARCHAR(1000), comment: "Free-form allergies/restrictions"}
+        target_calories: {type: NUMBER(5,0), comment: "daily caloric target"}
+        target_protein_g: {type: NUMBER(5,0), comment: "daily protein target"}
         created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
-        metadata: {type: VARIANT, comment: "free-form metadata JSON"}
-      comment: "Clients / members managed by personal trainers"
-
-    trainers:
-      columns:
-        trainer_id: {type: VARCHAR(36), pk: true}
-        name: {type: VARCHAR(200)}
-        email: {type: VARCHAR(255)}
-        phone: {type: VARCHAR(50)}
-        bio: {type: VARCHAR(2000)}
-        certifications: {type: VARIANT}
-        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
-
-    workouts:
-      columns:
-        workout_id: {type: VARCHAR(36), pk: true}
-        client_id: {type: VARCHAR(36), fk: clients.client_id}
-        trainer_id: {type: VARCHAR(36), fk: trainers.trainer_id}
-        program_id: {type: VARCHAR(36), nullable: true}
-        date: {type: DATE}
-        start_time: {type: TIMESTAMP_LTZ}
-        type: {type: VARCHAR(50), comment: "gym|run|cycling|swim|other"}
-        notes: {type: VARCHAR(2000)}
-        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
-        metadata: {type: VARIANT}
-      comment: "Top-level workout sessions. Suggested/actual exercise data stored in workout_exercises table."
-
-    workout_exercises:
-      columns:
-        id: {type: VARCHAR(36), pk: true}
-        workout_id: {type: VARCHAR(36), fk: workouts.workout_id}
-        exercise_id: {type: VARCHAR(36), fk: exercises.exercise_id}
-        order_index: {type: NUMBER}
-        suggested_sets: {type: NUMBER, nullable: true, comment: "AI-suggested sets"}
-        suggested_reps: {type: VARCHAR(50), nullable: true, comment: "AI-suggested reps (e.g., '8-12' or 'AMRAP')"}
-        suggested_weight_kg: {type: NUMBER(8,2), nullable: true, comment: "AI-suggested weight in kg"}
-        actual_sets: {type: NUMBER, nullable: true, comment: "Actual completed sets (input via Streamlit)"}
-        actual_reps: {type: VARCHAR(50), nullable: true, comment: "Actual completed reps"}
-        actual_weight_kg: {type: NUMBER(8,2), nullable: true, comment: "Actual used weight in kg"}
-        rpe: {type: NUMBER(3,1), nullable: true, comment: "Rate of Perceived Exertion for the exercise"}
-        notes: {type: VARCHAR(1000)}
-
-    exercises:
-      columns:
-        exercise_id: {type: VARCHAR(36), pk: true}
-        name: {type: VARCHAR(200)}
-        category: {type: VARCHAR(100), comment: "strength|cardio|mobility"}
-        primary_muscles: {type: VARIANT}
-        instructions: {type: VARCHAR(4000)}
-        equipment: {type: VARCHAR(200)}
-        video_url: {type: VARCHAR(2000)}
-        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
-
-    running_sessions:
-      columns:
-        run_id: {type: VARCHAR(36), pk: true}
-        client_id: {type: VARCHAR(36), fk: clients.client_id}
-        trainer_id: {type: VARCHAR(36), nullable: true}
-        date: {type: DATE}
-        suggested_distance_km: {type: NUMBER(8,3), nullable: true, comment: "AI-suggested target distance"}
-        suggested_pace_sec_per_km: {type: NUMBER(8,2), nullable: true, comment: "AI-suggested target pace"}
-        suggested_type: {type: VARCHAR(100), nullable: true, comment: "AI-suggested run type (easy, tempo, intervals, long, etc.)"}
-        actual_distance_km: {type: NUMBER(8,3), nullable: true, comment: "Actual completed distance (input via Streamlit)"}
-        actual_duration_sec: {type: NUMBER, nullable: true, comment: "Actual completed duration in seconds"}
-        actual_pace_sec_per_km: {type: NUMBER(8,2), nullable: true, comment: "Actual average pace"}
-        actual_type: {type: VARCHAR(100), nullable: true, comment: "Actual run type as performed"}
-        calories: {type: NUMBER(8,2), nullable: true}
-        route_geojson: {type: VARIANT, nullable: true, comment: "store GeoJSON points if available"}
-        device: {type: VARCHAR(200), nullable: true}
-        notes: {type: VARCHAR(2000), nullable: true}
-
-    meal_plans:
-      columns:
-        meal_plan_id: {type: VARCHAR(36), pk: true}
-        client_id: {type: VARCHAR(36), fk: clients.client_id}
-        trainer_id: {type: VARCHAR(36), nullable: true}
-        name: {type: VARCHAR(200)}
-        start_date: {type: DATE}
-        end_date: {type: DATE}
-        goals: {type: VARIANT}
-        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
-        metadata: {type: VARIANT}
-
-    recipes:
-      columns:
-        recipe_id: {type: VARCHAR(36), pk: true}
-        name: {type: VARCHAR(300)}
-        servings: {type: NUMBER}
-        total_calories: {type: NUMBER}
-        macronutrients: {type: VARIANT, comment: "{protein:.., carbs:.., fat:..}"}
-        ingredients: {type: VARIANT, comment: "array of ingredient objects"}
-        steps: {type: VARIANT}
-        tags: {type: VARIANT}
-        prep_time_min: {type: NUMBER}
-        cook_time_min: {type: NUMBER}
-        created_by: {type: VARCHAR(36)}
-        created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
-
-    recipe_ingredients:
-      columns:
-        id: {type: VARCHAR(36), pk: true}
-        recipe_id: {type: VARCHAR(36), fk: recipes.recipe_id}
-        name: {type: VARCHAR(300)}
-        quantity: {type: VARCHAR(100)}
-        calories: {type: NUMBER, nullable: true}
+        updated_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+      comment: "Client profiles with fitness goals and preferences"
 
     weigh_ins:
       columns:
         weigh_in_id: {type: VARCHAR(36), pk: true}
-        client_id: {type: VARCHAR(36), fk: clients.client_id}
-        date: {type: DATE}
-        weight_kg: {type: NUMBER(7,3)}
-        body_fat_pct: {type: NUMBER(5,2), nullable: true}
-        muscle_mass_kg: {type: NUMBER(7,3), nullable: true}
-        notes: {type: VARCHAR(1000)}
+        client_id: {type: VARCHAR(36), fk: clients.client_id, nullable: false}
+        weigh_in_date: {type: DATE, nullable: false}
+        weight_kg: {type: NUMBER(7,3), nullable: false}
+        body_fat_pct: {type: NUMBER(5,2), comment: "Optional body fat percentage"}
+        notes: {type: VARCHAR(500), comment: "Optional notes"}
         recorded_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
-        entry_source: {type: VARCHAR(50), comment: "manual|device|import"}
-        entered_by: {type: VARCHAR(36), comment: "who entered the weigh-in (client_id or trainer_id)"}
+      comment: "Weight tracking for clients"
 
     body_measurements:
       columns:
         measurement_id: {type: VARCHAR(36), pk: true}
-        client_id: {type: VARCHAR(36), fk: clients.client_id}
-        date: {type: DATE}
+        client_id: {type: VARCHAR(36), fk: clients.client_id, nullable: false}
+        measurement_date: {type: DATE, nullable: false}
         neck_cm: {type: NUMBER(6,2)}
         chest_cm: {type: NUMBER(6,2)}
         waist_cm: {type: NUMBER(6,2)}
@@ -317,93 +246,155 @@ data_model:
         thigh_cm: {type: NUMBER(6,2)}
         calf_cm: {type: NUMBER(6,2)}
         recorded_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+      comment: "Body measurements over time"
 
-    training_programs:
+    generated_workouts:
       columns:
-        program_id: {type: VARCHAR(36), pk: true}
-        name: {type: VARCHAR(300)}
-        client_id: {type: VARCHAR(36), nullable: true}
-        trainer_id: {type: VARCHAR(36), nullable: true}
-        duration_weeks: {type: NUMBER}
-        description: {type: VARCHAR(2000)}
-        structure: {type: VARIANT, comment: "hierarchical program JSON"}
+        workout_id: {type: VARCHAR(36), pk: true}
+        client_id: {type: VARCHAR(36), fk: clients.client_id, nullable: false}
+        generation_date: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP, nullable: false}
+        workout_week: {type: NUMBER(2,0), nullable: false, comment: "Week number in plan"}
+        workout_day: {type: NUMBER(1,0), nullable: false, comment: "Day of week (1-7)"}
+        workout_focus: {type: VARCHAR(200), nullable: false, comment: "e.g., 'Chest & Triceps', 'Leg Day'"}
+        duration_min: {type: NUMBER(3,0), nullable: false}
+        warm_up: {type: VARCHAR(1000), nullable: false}
+        exercises: {type: VARIANT, nullable: false, comment: "JSON array of exercises with sets/reps"}
+        cool_down: {type: VARCHAR(1000), nullable: false}
+        notes: {type: VARCHAR(2000)}
+        cortex_prompt: {type: VARCHAR(4000), comment: "Cortex Prompt Complete prompt used for generation"}
+        cortex_model: {type: VARCHAR(100), default: 'mistral-7b', comment: "Model used for generation"}
+      comment: "AI-generated workouts using Cortex Prompt Complete"
+
+    meal_plans:
+      columns:
+        meal_plan_id: {type: VARCHAR(36), pk: true}
+        client_id: {type: VARCHAR(36), fk: clients.client_id, nullable: false}
+        generation_date: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP, nullable: false}
+        plan_week: {type: NUMBER(2,0), nullable: false, comment: "Week number"}
+        duration_days: {type: NUMBER(2,0), default: 7, comment: "Number of days in plan"}
+        total_calories: {type: NUMBER(5,0), nullable: false}
+        protein_g: {type: NUMBER(5,0), nullable: false}
+        carbs_g: {type: NUMBER(5,0), nullable: false}
+        fat_g: {type: NUMBER(5,0), nullable: false}
+        meal_plan_json: {type: VARIANT, nullable: false, comment: "Complete meal plan with daily breakdowns"}
+        cortex_prompt: {type: VARCHAR(4000), comment: "Cortex Prompt Complete prompt used for generation"}
+        cortex_model: {type: VARCHAR(100), default: 'mistral-7b', comment: "Model used for generation"}
+      comment: "AI-generated meal plans using Cortex Prompt Complete"
+
+    recipes:
+      columns:
+        recipe_id: {type: VARCHAR(36), pk: true}
+        recipe_name: {type: VARCHAR(300), nullable: false}
+        servings: {type: NUMBER(2,0), nullable: false}
+        total_calories: {type: NUMBER(5,0), nullable: false}
+        protein_g: {type: NUMBER(5,1), nullable: false}
+        carbs_g: {type: NUMBER(5,1), nullable: false}
+        fat_g: {type: NUMBER(5,1), nullable: false}
+        ingredients: {type: VARIANT, nullable: false, comment: "JSON array of ingredients"}
+        instructions: {type: VARCHAR(4000), nullable: false}
+        prep_time_min: {type: NUMBER(3,0)}
+        cook_time_min: {type: NUMBER(3,0)}
+        tags: {type: VARIANT, comment: "JSON array of tags (vegetarian, vegan, etc.)"}
         created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
+      comment: "Recipe library for meal plans"
 
-    sessions:
+    exercises_library:
       columns:
-        session_id: {type: VARCHAR(36), pk: true}
-        client_id: {type: VARCHAR(36), fk: clients.client_id}
-        trainer_id: {type: VARCHAR(36), fk: trainers.trainer_id}
-        start_time: {type: TIMESTAMP_LTZ}
-        end_time: {type: TIMESTAMP_LTZ}
-        session_type: {type: VARCHAR(100)}
-        notes: {type: VARCHAR(4000)}
-
-    nutrition_logs:
-      columns:
-        log_id: {type: VARCHAR(36), pk: true}
-        client_id: {type: VARCHAR(36), fk: clients.client_id}
-        date: {type: DATE}
-        meal_time: {type: TIMESTAMP_LTZ}
-        recipe_id: {type: VARCHAR(36), nullable: true}
-        calories: {type: NUMBER}
-        macros: {type: VARIANT}
-        raw_entry: {type: VARCHAR(4000)}
-
-    ai_embeddings:
-      columns:
-        id: {type: VARCHAR(36), pk: true}
-        source_table: {type: VARCHAR(200)}
-        source_id: {type: VARCHAR(36)}
-        embedding: {type: VARIANT, comment: "vector or array stored as VARIANT"}
-        model: {type: VARCHAR(200)}
+        exercise_id: {type: VARCHAR(36), pk: true}
+        exercise_name: {type: VARCHAR(200), nullable: false}
+        category: {type: VARCHAR(100), nullable: false, comment: "strength|cardio|flexibility"}
+        target_muscles: {type: VARIANT, comment: "JSON array of muscle groups"}
+        equipment_required: {type: VARIANT, comment: "JSON array of equipment"}
+        difficulty_level: {type: VARCHAR(20), comment: "Beginner|Intermediate|Advanced"}
+        instructions: {type: VARCHAR(2000)}
+        variations: {type: VARIANT, comment: "JSON array of exercise variations"}
         created_at: {type: TIMESTAMP_LTZ, default: CURRENT_TIMESTAMP}
-      comment: "Store embeddings used for similarity search and AI features"
+      comment: "Exercise reference library"
 
 pipelines:
-  ingestion:
-    # Weigh-ins are entered manually via the Streamlit UI. If you want to
-    # support CSV/device ingestion later, add a separate ingest task that
-    # writes to a staging table and validates entries before inserting into
-    # the canonical `weigh_ins` table.
-
-  transforms:
-    - name: daily_aggregate_metrics
-      schedule: "USING CRON 0 2 * * * UTC"
-      task: |
-        -- Example: aggregate daily client activity metrics into a materialized view or table
-        CREATE OR REPLACE TABLE daily_client_metrics AS
-        SELECT client_id, DATE(start_time) AS day, COUNT(DISTINCT workout_id) AS workouts_count,
-               SUM(duration_min) AS total_minutes
-        FROM ${SNOWFLAKE_DATABASE}.${SNOWFLAKE_SCHEMA}.workouts
-        GROUP BY client_id, DATE(start_time);
+  cortex_generation:
+    workout_generation:
+      description: "Generate personalized workouts using Cortex Prompt Complete"
+      trigger: "On-demand via Streamlit UI"
+      method: CORTEX.COMPLETE()
+      model: mistral-7b
+      prompt_template: |
+        You are an expert personal trainer. Generate a detailed workout plan for a client.
+        
+        Client Profile:
+        - Fitness Level: {fitness_level}
+        - Goals: {fitness_goals}
+        - Available Equipment: {available_equipment}
+        - Days Available per Week: {days_per_week}
+        - Preferred Duration: {workout_duration_min} minutes
+        
+        Generate a complete {workout_duration_min}-minute workout including:
+        1. Warm-up (5 minutes)
+        2. Main exercises with sets, reps, and rest periods
+        3. Cool-down (5-10 minutes)
+        
+        Format as JSON with structure:
+        {{
+          "warm_up": "description",
+          "exercises": [
+            {{"name": "exercise", "sets": X, "reps": "Y-Z", "rest_sec": 60, "notes": "cues"}},
+            ...
+          ],
+          "cool_down": "description"
+        }}
+    
+    meal_plan_generation:
+      description: "Generate personalized meal plans using Cortex Prompt Complete"
+      trigger: "On-demand via Streamlit UI"
+      method: CORTEX.COMPLETE()
+      model: mistral-7b
+      prompt_template: |
+        You are a sports nutritionist. Create a detailed 7-day meal plan for a client.
+        
+        Client Profile:
+        - Target Daily Calories: {target_calories}
+        - Target Protein: {target_protein_g}g
+        - Dietary Preferences: {dietary_preferences}
+        - Allergies/Restrictions: {allergies}
+        - Fitness Goals: {fitness_goals}
+        
+        Generate a complete 7-day meal plan with:
+        1. Daily breakdown (breakfast, lunch, dinner, snacks)
+        2. Macronutrient targets
+        3. Specific recipes or foods
+        
+        Format as JSON with structure:
+        {{
+          "weekly_totals": {{"calories": X, "protein": Y, "carbs": Z, "fat": W}},
+          "days": [
+            {{
+              "day": 1,
+              "meals": [
+                {{"meal_type": "breakfast", "foods": [...], "calories": X, "protein": Y}}
+              ]
+            }}
+          ]
+        }}
 
 ai_integration:
-  features:
-    - name: workout_generator
-      description: "Generate a workout plan given client goals and constraints"
-      inputs: [client_profile, goals, equipment, program_history]
-      outputs: [workout_plan JSON]
-    - name: mealplan_generator
-      description: "Generate meal plans & recipes aligned to macros and preferences"
-      inputs: [client_profile, goals, allergies]
-      outputs: [meal_plan JSON]
-    - name: progress_predictor
-      description: "Predict likely progress trajectory from historical data"
-      inputs: [weigh_ins, training_load, nutrition_logs, sleep_hours]
-      outputs: [predicted_weight, confidence]
-
-  model_store:
-    default_model: openai-gpt
-    openai:
-      model: gpt-4o
-      temperature: 0.2
-      max_tokens: 1024
-
-vector_search:
-  embeddings_table: ${SNOWFLAKE_DATABASE}.${SNOWFLAKE_SCHEMA}.ai_embeddings
-  embedding_source: sentence-transformers/all-mpnet-base-v2
-  notes: "Store embeddings in VARIANT or a vector-enabled column if available in your Snowflake account."
+  cortex_models:
+    - model: mistral-7b
+      max_tokens: 2048
+      temperature: 0.7
+    - model: snowflake-arctic
+      max_tokens: 2048
+      temperature: 0.5
+  
+  generation_endpoints:
+    - name: generate_workout
+      method: CORTEX.COMPLETE()
+      timeout_sec: 60
+      caching: true
+    
+    - name: generate_meal_plan
+      method: CORTEX.COMPLETE()
+      timeout_sec: 60
+      caching: true
 
 security:
   recommended_roles:
@@ -413,26 +404,113 @@ security:
     - role: TRAINING_APP_ROLE
       privileges:
         - USAGE: [warehouse, database, schema]
-        - SELECT/INSERT/UPDATE/DELETE: [tables listed in data_model]
+        - SELECT/INSERT/UPDATE: [all_tables]
+    - role: TRAINING_APP_ADMIN
+      privileges:
+        - OWNERSHIP: [warehouse, database, schema]
+        - ALL: [all_tables]
 
 observability:
   logging:
     - destination: snowflake_table
       table: app_logs
+      events: ["workout_generated", "meal_plan_generated", "client_created", "weigh_in_recorded"]
+  
   metrics:
-    - name: active_clients_daily
+    - name: workouts_generated_daily
       query: |
-        SELECT COUNT(DISTINCT client_id) FROM ${SNOWFLAKE_DATABASE}.${SNOWFLAKE_SCHEMA}.sessions
-        WHERE DATE(start_time) = CURRENT_DATE();
+        SELECT COUNT(*) as count FROM generated_workouts 
+        WHERE DATE(generation_date) = CURRENT_DATE()
+    
+    - name: meal_plans_generated_daily
+      query: |
+        SELECT COUNT(*) as count FROM meal_plans 
+        WHERE DATE(generation_date) = CURRENT_DATE()
+    
+    - name: active_clients
+      query: |
+        SELECT COUNT(DISTINCT client_id) as count FROM clients
+
+streamlit_pages:
+  description: "Streamlit app pages for Stage 1"
+  pages:
+    - name: home
+      title: "Welcome"
+      description: "App overview and client management"
+      components:
+        - New Client Profile Form
+        - View All Clients
+        - Client Statistics
+    
+    - name: workout_generator
+      title: "Generate Workout"
+      description: "AI-powered workout generation using Cortex Prompt Complete"
+      components:
+        - Select Client
+        - Generate Workout Button
+        - Display Generated Workout
+        - Save to Database
+        - View Workout History
+    
+    - name: meal_plan_generator
+      title: "Generate Meal Plan"
+      description: "AI-powered meal plan generation using Cortex Prompt Complete"
+      components:
+        - Select Client
+        - Generate Meal Plan Button
+        - Display Generated Meal Plan
+        - Save to Database
+        - View Meal Plan History
+    
+    - name: weight_tracking
+      title: "Weight & Measurements"
+      description: "Track weight and body measurements over time"
+      components:
+        - Select Client
+        - Record Weight (weigh-in form)
+        - Record Body Measurements (measurements form)
+        - Display Weight History Chart
+        - Display Progress Trends
+    
+    - name: client_profile
+      title: "Client Profiles"
+      description: "View and manage client profiles"
+      components:
+        - Client List
+        - View Client Details
+        - Edit Client Profile
+        - Delete Client
 
 notes_and_next_steps:
-  - "Replace placeholder env values with secure secret bindings in Streamlit Native deployment."
-  - "Weigh-ins are collected manually through the Streamlit UI by default (no CSV ingestion)."
-  - "All suggested vs actual values use standard data types (NUMBER, VARCHAR) -- no VARIANT fields for performance and schema clarity."
-  - "Create Snowflake roles/warehouses/database and run CREATE TABLE statements derived from the `data_model` section."
-  - "Implement `app.py` using the form specifications in `deployment.streamlit_input_forms` to build Streamlit UI pages: Clients, Workouts, Running Sessions, Meal Plans, Weigh-ins, Analytics, AI Tools."
-  - "For workout exercises: trainers provide AI-suggested values (sets/reps/weight), clients input actual values via Streamlit form."
-  - "For running sessions: generate AI-suggested runs (distance/pace/type), clients log actual performance (distance/duration/pace/type)."
-  - "Add a periodic Snowflake Task to refresh AI embeddings after new content is added."
-  - "Consider using Snowflake Vector Search (if available) for fast similarity lookups or store embeddings in `ai_embeddings`."
-  - "Add CI pipeline for building / testing and deploying Streamlit Native app to Snowflake." 
+  stage_1_deliverables:
+    - "✅ Client profile form for capturing fitness goals, preferences, and constraints"
+    - "✅ Workout generation via Cortex Prompt Complete (automatic, AI-powered)"
+    - "✅ Meal plan generation via Cortex Prompt Complete (automatic, AI-powered)"
+    - "✅ Weight tracking with weigh-in form"
+    - "✅ Body measurements tracking"
+    - "✅ Database schema for clients, generated_workouts, meal_plans, recipes, weigh_ins, body_measurements, exercises_library"
+    - "✅ Streamlit UI with 5 pages: Home, Workout Generator, Meal Plan Generator, Weight Tracking, Client Profiles"
+  
+  implementation_notes:
+    - "Trainers table REMOVED - AI (Cortex) acts as the trainer"
+    - "Workout logging REMOVED - will be added in Stage 2"
+    - "All workouts generated automatically via Cortex Prompt Complete using mistral-7b or snowflake-arctic"
+    - "All meal plans generated automatically via Cortex Prompt Complete"
+    - "Cortex responses stored in VARIANT columns for flexibility"
+    - "Manual weigh-in entry form for clients to track progress"
+    - "Exercise library table for reference and future workout analysis"
+  
+  future_stages:
+    - "Stage 2: Add workout logging and actual performance tracking"
+    - "Stage 3: Add running/cardio tracking with auto-generation"
+    - "Stage 4: Add nutrition logging and recipe recommendations"
+    - "Stage 5: Add progress analytics and prediction models"
+    - "Stage 6: Add progress photos and visual tracking"
+  
+  cortex_prompt_complete_setup:
+    - "Ensure Cortex is enabled in your Snowflake account"
+    - "Grant CORTEX_FUNCTIONS usage privilege to TRAINING_APP_ROLE"
+    - "Use CORTEX.COMPLETE() function in Streamlit app to call AI models"
+    - "Models available: mistral-7b, snowflake-arctic, llama2-7b, etc."
+    - "All Cortex calls should include timeout handling (60 sec recommended)"
+    - "Consider caching Cortex responses to avoid redundant API calls" 

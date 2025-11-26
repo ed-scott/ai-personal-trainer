@@ -1,678 +1,833 @@
 """
-AI Personal Trainer - Streamlit Native App
-================================================
-
-Main application entry point for the AI Personal Trainer app hosted in Snowflake.
-
-This app provides:
-- Client weigh-in tracking (manual entry)
-- Workout logging with suggested vs actual performance
-- Running session tracking
-- Nutrition and meal planning
-- Progress dashboards with AI insights
-
-All data is stored in Snowflake tables (TRAINING_DB.PUBLIC).
-Authentication and permissions are managed via Snowflake roles.
-
-Usage:
-    streamlit run app.py
-
-Environment Requirements:
-    - SNOWFLAKE_ACCOUNT
-    - SNOWFLAKE_USER
-    - SNOWFLAKE_PASSWORD
-    - SNOWFLAKE_ROLE
-    - SNOWFLAKE_WAREHOUSE
-    - SNOWFLAKE_DATABASE (default: TRAINING_DB)
-    - SNOWFLAKE_SCHEMA (default: PUBLIC)
-    - OPENAI_API_KEY (optional, for AI features)
+AI Personal Trainer - Stage 1
+Snowflake Native Streamlit Application
+Personalized Workout and Meal Plan Generation using Cortex Prompt Complete
 """
 
 import streamlit as st
 import pandas as pd
-import numpy as np
+import json
 from datetime import datetime, timedelta
-import plotly.graph_objects as go
+import uuid
+from snowflake.snowpark import Session
+from snowflake.snowpark.types import StructType, StructField, StringType, IntegerType, DoubleType, DateType
+from snowflake.snowpark.functions import current_timestamp, col, to_date, to_timestamp
 import plotly.express as px
-from snowflake.snowpark.session import Session
-from snowflake.snowpark import functions as F
-import os
-from typing import Optional, List, Dict
-import logging
+import plotly.graph_objects as go
 
-# ========================================================================
-# CONFIGURATION & SETUP
-# ========================================================================
+# ============================================================================
+# Configuration and Setup
+# ============================================================================
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Page configuration
 st.set_page_config(
-    page_title="AI Personal Trainer",
-    page_icon="💪",
+    page_title="AI Personal Trainer - Stage 1",
+    page_icon="🏋️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Apply custom styling
-st.markdown("""
-<style>
-    .main {
-        padding-top: 2rem;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        color: white;
-    }
-    .header-title {
-        color: #667eea;
-        font-size: 2rem;
-        font-weight: bold;
-        margin-bottom: 1rem;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ========================================================================
-# SNOWFLAKE CONNECTION
-# ========================================================================
-
 @st.cache_resource
-def get_snowflake_connection() -> Session:
-    """
-    Establish connection to Snowflake using environment variables.
-    Connection is cached to avoid reconnecting on every script run.
-    """
+def get_snowpark_session():
+    """Initialize and cache Snowpark session"""
+    return Session.builder.configs(st.secrets["snowflake"]).create()
+
+session = get_snowpark_session()
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+def generate_uuid():
+    """Generate a UUID for database records"""
+    return str(uuid.uuid4())
+
+def log_event(event_type: str, client_id: str = None, message: str = None, context: dict = None):
+    """Log events to the app_logs table"""
     try:
-        connection_params = {
-            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
-            "user": os.getenv("SNOWFLAKE_USER"),
-            "password": os.getenv("SNOWFLAKE_PASSWORD"),
-            "role": os.getenv("SNOWFLAKE_ROLE", "TRAINING_APP_ROLE"),
-            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "TRAINING_WH"),
-            "database": os.getenv("SNOWFLAKE_DATABASE", "TRAINING_DB"),
-            "schema": os.getenv("SNOWFLAKE_SCHEMA", "PUBLIC"),
-        }
+        log_id = generate_uuid()
+        context_json = json.dumps(context) if context else None
         
-        session = Session.builder.configs(connection_params).create()
-        logger.info("✅ Connected to Snowflake")
-        return session
+        insert_sql = f"""
+        INSERT INTO TRAINING_DB.PUBLIC.app_logs 
+        (log_id, event_type, severity, client_id, message, context)
+        VALUES ('{log_id}', '{event_type}', 'INFO', {f"'{client_id}'" if client_id else 'NULL'}, 
+                {f"'{message}'" if message else 'NULL'}, PARSE_JSON('{context_json}'))
+        """
+        session.sql(insert_sql).collect()
     except Exception as e:
-        logger.error(f"❌ Failed to connect to Snowflake: {str(e)}")
-        st.error(f"Database connection failed: {str(e)}")
-        st.stop()
+        st.error(f"Logging error: {str(e)}")
 
-# ========================================================================
-# DATABASE HELPERS
-# ========================================================================
-
-def execute_query(session: Session, query: str) -> pd.DataFrame:
-    """Execute a SQL query and return results as DataFrame."""
+def get_clients():
+    """Fetch all clients from database"""
     try:
-        result = session.sql(query).to_pandas()
-        return result
+        df = session.sql("SELECT * FROM TRAINING_DB.PUBLIC.clients ORDER BY created_at DESC").to_pandas()
+        return df
     except Exception as e:
-        logger.error(f"Query failed: {str(e)}")
-        st.error(f"Query error: {str(e)}")
+        st.error(f"Error fetching clients: {str(e)}")
         return pd.DataFrame()
 
-def execute_insert(session: Session, query: str) -> bool:
-    """Execute an INSERT query."""
+def insert_client(client_data: dict):
+    """Insert a new client into the database"""
     try:
-        session.sql(query).collect()
-        return True
+        client_id = generate_uuid()
+        
+        insert_sql = f"""
+        INSERT INTO TRAINING_DB.PUBLIC.clients
+        (client_id, client_name, age, gender, current_weight_kg, height_cm, 
+         fitness_level, fitness_goals, available_equipment, days_per_week, 
+         workout_duration_min, dietary_preferences, allergies, target_calories, target_protein_g)
+        SELECT
+        '{client_id}',
+        '{client_data['client_name']}',
+        {client_data['age']},
+        '{client_data['gender']}',
+        {client_data['current_weight_kg']},
+        {client_data['height_cm']},
+        '{client_data['fitness_level']}',
+        PARSE_JSON('{json.dumps(client_data['fitness_goals'])}'),
+        PARSE_JSON('{json.dumps(client_data['available_equipment'])}'),
+        {client_data['days_per_week']},
+        {client_data['workout_duration_min']},
+        PARSE_JSON('{json.dumps(client_data['dietary_preferences'])}'),
+        {f"'{client_data['allergies']}'" if client_data['allergies'] else 'NULL'},
+        {client_data['target_calories'] if client_data['target_calories'] else 'NULL'},
+        {client_data['target_protein_g'] if client_data['target_protein_g'] else 'NULL'}
+        """
+        
+        session.sql(insert_sql).collect()
+        log_event("client_created", client_id=client_id, message=f"Client {client_data['client_name']} created")
+        return client_id
     except Exception as e:
-        logger.error(f"Insert failed: {str(e)}")
-        st.error(f"Insert error: {str(e)}")
-        return False
+        st.error(f"Error creating client: {str(e)}")
+        return None
 
-def get_clients(session: Session) -> pd.DataFrame:
-    """Get list of active clients."""
-    query = """
-    SELECT client_id, CONCAT(first_name, ' ', last_name) as client_name, email
-    FROM CLIENTS
-    ORDER BY first_name, last_name
-    """
-    return execute_query(session, query)
+def generate_workout_cortex(client_id: str, client_data: dict):
+    """Generate workout using Cortex Prompt Complete"""
+    try:
+        # Build prompt from client data
+        fitness_goals = ', '.join(client_data['fitness_goals']) if isinstance(client_data['fitness_goals'], list) else client_data['fitness_goals']
+        equipment = ', '.join(client_data['available_equipment']) if isinstance(client_data['available_equipment'], list) else client_data['available_equipment']
+        
+        prompt = f"""You are an expert personal trainer. Generate a detailed workout plan for a client.
 
-def get_trainers(session: Session) -> pd.DataFrame:
-    """Get list of trainers."""
-    query = """
-    SELECT trainer_id, name, email
-    FROM TRAINERS
-    ORDER BY name
-    """
-    return execute_query(session, query)
+Client Profile:
+- Fitness Level: {client_data['fitness_level']}
+- Goals: {fitness_goals}
+- Available Equipment: {equipment}
+- Days Available per Week: {client_data['days_per_week']}
+- Preferred Duration: {client_data['workout_duration_min']} minutes
 
-def get_exercises(session: Session) -> pd.DataFrame:
-    """Get list of exercises."""
-    query = """
-    SELECT exercise_id, name, category, equipment
-    FROM EXERCISES
-    ORDER BY name
-    """
-    return execute_query(session, query)
+Generate a complete {client_data['workout_duration_min']}-minute workout including:
+1. Warm-up (5 minutes)
+2. Main exercises with sets, reps, and rest periods (appropriate to their fitness level)
+3. Cool-down (5-10 minutes)
 
-def get_client_recent_weighins(session: Session, client_id: str, days: int = 30) -> pd.DataFrame:
-    """Get recent weigh-ins for a client."""
-    query = f"""
-    SELECT 
-        date,
-        weight_kg,
-        body_fat_pct,
-        muscle_mass_kg,
-        notes
-    FROM WEIGH_INS
-    WHERE client_id = '{client_id}'
-    AND date >= CURRENT_DATE - INTERVAL '{days} days'
-    ORDER BY date DESC
-    """
-    return execute_query(session, query)
+Format EXACTLY as this JSON structure (no extra text before or after):
+{{
+  "warm_up": "description here",
+  "exercises": [
+    {{"name": "Exercise Name", "sets": 3, "reps": "8-10", "rest_sec": 60, "notes": "form cues"}},
+    {{"name": "Exercise Name", "sets": 3, "reps": "8-10", "rest_sec": 60, "notes": "form cues"}}
+  ],
+  "cool_down": "description here"
+}}"""
+        
+        # Call Cortex
+        cortex_sql = f"""
+        SELECT SNOWFLAKE.CORTEX.COMPLETE(
+            'mistral-7b',
+            '{prompt}'
+        ) AS response
+        """
+        
+        result = session.sql(cortex_sql).collect()
+        response_text = result[0][0]
+        
+        # Parse JSON from response
+        # Try to extract JSON from response text
+        import re
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            workout_json = json.loads(json_match.group())
+        else:
+            workout_json = json.loads(response_text)
+        
+        return workout_json, prompt
+    except Exception as e:
+        st.error(f"Error generating workout with Cortex: {str(e)}")
+        return None, None
 
-def get_client_progress(session: Session, client_id: str) -> pd.DataFrame:
-    """Get client progress summary."""
-    query = f"""
-    SELECT *
-    FROM CLIENT_PROGRESS_SUMMARY
-    WHERE client_id = '{client_id}'
-    """
-    return execute_query(session, query)
+def generate_meal_plan_cortex(client_data: dict):
+    """Generate meal plan using Cortex Prompt Complete"""
+    try:
+        fitness_goals = ', '.join(client_data['fitness_goals']) if isinstance(client_data['fitness_goals'], list) else client_data['fitness_goals']
+        dietary_prefs = ', '.join(client_data['dietary_preferences']) if isinstance(client_data['dietary_preferences'], list) else client_data['dietary_preferences']
+        
+        target_calories = client_data.get('target_calories', 2000)
+        target_protein = client_data.get('target_protein_g', 150)
+        
+        prompt = f"""You are a sports nutritionist. Create a detailed 7-day meal plan for a client.
 
-# ========================================================================
-# MAIN APPLICATION
-# ========================================================================
+Client Profile:
+- Target Daily Calories: {target_calories}
+- Target Protein: {target_protein}g
+- Dietary Preferences: {dietary_prefs}
+- Allergies/Restrictions: {client_data.get('allergies', 'None')}
+- Fitness Goals: {fitness_goals}
 
-def main():
-    """Main application logic with multi-page navigation."""
-    
-    # Initialize session state
-    if "session" not in st.session_state:
-        st.session_state.session = get_snowflake_connection()
-    
-    session = st.session_state.session
-    
-    # ====================================================================
-    # HEADER
-    # ====================================================================
-    
-    st.markdown("# 💪 AI Personal Trainer")
-    st.markdown("_AI-powered fitness tracking powered by Snowflake_")
-    
-    # ====================================================================
-    # SIDEBAR NAVIGATION
-    # ====================================================================
-    
-    with st.sidebar:
-        st.header("Navigation")
-        page = st.radio(
-            "Select Page",
-            options=[
-                "Dashboard",
-                "📊 Progress",
-                "⚖️ Weigh-In",
-                "🏋️ Workouts",
-                "🏃 Running",
-                "🍽️ Nutrition",
-                "⚙️ Settings"
-            ]
-        )
-    
-    # ====================================================================
-    # PAGE ROUTING
-    # ====================================================================
-    
-    if page == "Dashboard":
-        show_dashboard(session)
-    
-    elif page == "📊 Progress":
-        show_progress(session)
-    
-    elif page == "⚖️ Weigh-In":
-        show_weighin(session)
-    
-    elif page == "🏋️ Workouts":
-        show_workouts(session)
-    
-    elif page == "🏃 Running":
-        show_running(session)
-    
-    elif page == "🍽️ Nutrition":
-        show_nutrition(session)
-    
-    elif page == "⚙️ Settings":
-        show_settings(session)
+Generate a complete 7-day meal plan with:
+1. Daily meals (breakfast, lunch, dinner, snacks)
+2. Macronutrient targets per day
+3. Specific recipes or foods
 
-# ========================================================================
-# PAGE: DASHBOARD
-# ========================================================================
+Format EXACTLY as this JSON structure (no extra text before or after):
+{{
+  "weekly_totals": {{"calories": {target_calories}, "protein": {target_protein}, "carbs": 200, "fat": 70}},
+  "days": [
+    {{
+      "day": 1,
+      "meals": [
+        {{"meal_type": "breakfast", "foods": ["food 1", "food 2"], "calories": 500, "protein": 30}},
+        {{"meal_type": "lunch", "foods": ["food 1", "food 2"], "calories": 600, "protein": 40}},
+        {{"meal_type": "dinner", "foods": ["food 1", "food 2"], "calories": 650, "protein": 45}},
+        {{"meal_type": "snacks", "foods": ["snack"], "calories": 250, "protein": 35}}
+      ]
+    }}
+  ]
+}}"""
+        
+        cortex_sql = f"""
+        SELECT SNOWFLAKE.CORTEX.COMPLETE(
+            'mistral-7b',
+            '{prompt}'
+        ) AS response
+        """
+        
+        result = session.sql(cortex_sql).collect()
+        response_text = result[0][0]
+        
+        import re
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            meal_plan_json = json.loads(json_match.group())
+        else:
+            meal_plan_json = json.loads(response_text)
+        
+        return meal_plan_json, prompt
+    except Exception as e:
+        st.error(f"Error generating meal plan with Cortex: {str(e)}")
+        return None, None
 
-def show_dashboard(session: Session):
-    """Dashboard overview page."""
-    st.subheader("Dashboard")
+def save_workout(client_id: str, workout_data: dict, prompt: str, week: int = 1, day: int = 1):
+    """Save generated workout to database"""
+    try:
+        workout_id = generate_uuid()
+        
+        insert_sql = f"""
+        INSERT INTO TRAINING_DB.PUBLIC.generated_workouts
+        (workout_id, client_id, workout_week, workout_day, workout_focus, duration_min,
+         warm_up, exercises, cool_down, cortex_prompt, cortex_model)
+        SELECT
+        '{workout_id}',
+        '{client_id}',
+        {week},
+        {day},
+        'Generated Workout',
+        60,
+        '{workout_data['warm_up'].replace("'", "''")}',
+        PARSE_JSON('{json.dumps(workout_data['exercises'])}'),
+        '{workout_data['cool_down'].replace("'", "''")}',
+        '{prompt.replace("'", "''")}',
+        'mistral-7b'
+        """
+        
+        session.sql(insert_sql).collect()
+        log_event("workout_generated", client_id=client_id, message="Workout generated and saved")
+        return workout_id
+    except Exception as e:
+        st.error(f"Error saving workout: {str(e)}")
+        return None
+
+def save_meal_plan(client_id: str, meal_plan_data: dict, prompt: str, week: int = 1):
+    """Save generated meal plan to database"""
+    try:
+        meal_plan_id = generate_uuid()
+        totals = meal_plan_data['weekly_totals']
+        
+        insert_sql = f"""
+        INSERT INTO TRAINING_DB.PUBLIC.meal_plans
+        (meal_plan_id, client_id, plan_week, duration_days, total_calories, protein_g, 
+         carbs_g, fat_g, meal_plan_json, cortex_prompt, cortex_model)
+        SELECT
+        '{meal_plan_id}',
+        '{client_id}',
+        {week},
+        7,
+        {totals['calories']},
+        {totals['protein']},
+        {totals['carbs']},
+        {totals['fat']},
+        PARSE_JSON('{json.dumps(meal_plan_data)}'),
+        '{prompt.replace("'", "''")}',
+        'mistral-7b'
+        """
+        
+        session.sql(insert_sql).collect()
+        log_event("meal_plan_generated", client_id=client_id, message="Meal plan generated and saved")
+        return meal_plan_id
+    except Exception as e:
+        st.error(f"Error saving meal plan: {str(e)}")
+        return None
+
+def insert_weigh_in(client_id: str, weigh_in_date: datetime, weight_kg: float, body_fat_pct: float = None, notes: str = None):
+    """Insert weigh-in record"""
+    try:
+        weigh_in_id = generate_uuid()
+        
+        insert_sql = f"""
+        INSERT INTO TRAINING_DB.PUBLIC.weigh_ins
+        (weigh_in_id, client_id, weigh_in_date, weight_kg, body_fat_pct, notes)
+        SELECT
+        '{weigh_in_id}',
+        '{client_id}',
+        '{weigh_in_date.strftime("%Y-%m-%d")}',
+        {weight_kg},
+        {body_fat_pct if body_fat_pct else 'NULL'},
+        {f"'{notes}'" if notes else 'NULL'}
+        """
+        
+        session.sql(insert_sql).collect()
+        log_event("weigh_in_recorded", client_id=client_id, message=f"Weigh-in recorded: {weight_kg}kg")
+        return weigh_in_id
+    except Exception as e:
+        st.error(f"Error saving weigh-in: {str(e)}")
+        return None
+
+def get_client_workouts(client_id: str):
+    """Get all workouts for a client"""
+    try:
+        df = session.sql(f"""
+        SELECT * FROM TRAINING_DB.PUBLIC.generated_workouts 
+        WHERE client_id = '{client_id}'
+        ORDER BY generation_date DESC
+        """).to_pandas()
+        return df
+    except Exception as e:
+        st.error(f"Error fetching workouts: {str(e)}")
+        return pd.DataFrame()
+
+def get_client_meal_plans(client_id: str):
+    """Get all meal plans for a client"""
+    try:
+        df = session.sql(f"""
+        SELECT * FROM TRAINING_DB.PUBLIC.meal_plans 
+        WHERE client_id = '{client_id}'
+        ORDER BY generation_date DESC
+        """).to_pandas()
+        return df
+    except Exception as e:
+        st.error(f"Error fetching meal plans: {str(e)}")
+        return pd.DataFrame()
+
+def get_client_weight_history(client_id: str):
+    """Get weight history for a client"""
+    try:
+        df = session.sql(f"""
+        SELECT weigh_in_date, weight_kg, body_fat_pct
+        FROM TRAINING_DB.PUBLIC.weigh_ins 
+        WHERE client_id = '{client_id}'
+        ORDER BY weigh_in_date ASC
+        """).to_pandas()
+        return df
+    except Exception as e:
+        st.error(f"Error fetching weight history: {str(e)}")
+        return pd.DataFrame()
+
+# ============================================================================
+# Page: Home / Client Management
+# ============================================================================
+
+def page_home():
+    st.title("🏋️ AI Personal Trainer - Stage 1")
+    st.markdown("**Personalized Workout and Meal Plan Generation with Cortex Prompt Complete**")
     
-    col1, col2, col3, col4 = st.columns(4)
+    tab1, tab2 = st.tabs(["Create New Client", "View Clients"])
+    
+    with tab1:
+        st.header("Create New Client Profile")
+        
+        with st.form("client_form"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                client_name = st.text_input("Client Name", placeholder="John Doe")
+                age = st.number_input("Age", min_value=18, max_value=100, value=30)
+                gender = st.selectbox("Gender", ["Male", "Female", "Other"])
+                current_weight_kg = st.number_input("Current Weight (kg)", min_value=30.0, max_value=300.0, value=75.0, format="%.2f")
+                height_cm = st.number_input("Height (cm)", min_value=100, max_value=250, value=180)
+            
+            with col2:
+                fitness_level = st.selectbox("Fitness Level", ["Beginner", "Intermediate", "Advanced"])
+                fitness_goals = st.multiselect(
+                    "Fitness Goals",
+                    ["Weight Loss", "Muscle Gain", "Endurance", "Strength", "General Fitness", "Flexibility"],
+                    default=["Muscle Gain"]
+                )
+                available_equipment = st.multiselect(
+                    "Available Equipment",
+                    ["Dumbbells", "Barbell", "Gym Machine", "Cardio Equipment", "Bodyweight Only", "Resistance Bands"],
+                    default=["Dumbbells"]
+                )
+                days_per_week = st.number_input("Days Available per Week", min_value=1, max_value=7, value=4)
+                workout_duration_min = st.number_input("Workout Duration (minutes)", min_value=15, max_value=180, value=60)
+            
+            st.divider()
+            
+            col3, col4 = st.columns(2)
+            
+            with col3:
+                dietary_preferences = st.multiselect(
+                    "Dietary Preferences",
+                    ["Vegetarian", "Vegan", "Keto", "Paleo", "Mediterranean", "None"],
+                    default=["None"]
+                )
+                allergies = st.text_area("Allergies / Restrictions", placeholder="e.g., nuts, dairy, gluten")
+            
+            with col4:
+                target_calories = st.number_input("Caloric Target (kcal/day)", min_value=1200, max_value=5000, value=2000)
+                target_protein_g = st.number_input("Protein Target (g/day)", min_value=50, max_value=300, value=150)
+            
+            if st.form_submit_button("✅ Create Client", use_container_width=True):
+                if not client_name:
+                    st.error("Please enter a client name")
+                else:
+                    client_data = {
+                        'client_name': client_name,
+                        'age': age,
+                        'gender': gender,
+                        'current_weight_kg': current_weight_kg,
+                        'height_cm': height_cm,
+                        'fitness_level': fitness_level,
+                        'fitness_goals': fitness_goals,
+                        'available_equipment': available_equipment,
+                        'days_per_week': days_per_week,
+                        'workout_duration_min': workout_duration_min,
+                        'dietary_preferences': dietary_preferences,
+                        'allergies': allergies,
+                        'target_calories': target_calories,
+                        'target_protein_g': target_protein_g
+                    }
+                    
+                    client_id = insert_client(client_data)
+                    if client_id:
+                        st.success(f"✅ Client created successfully! ID: {client_id}")
+                        st.balloons()
+    
+    with tab2:
+        st.header("All Clients")
+        clients_df = get_clients()
+        
+        if not clients_df.empty:
+            st.dataframe(
+                clients_df[['client_id', 'client_name', 'age', 'fitness_level', 'current_weight_kg', 'created_at']],
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No clients found. Create a new client to get started!")
+
+# ============================================================================
+# Page: Workout Generator
+# ============================================================================
+
+def page_workout_generator():
+    st.title("💪 Workout Generator")
+    st.markdown("Generate personalized workouts using AI (Cortex Prompt Complete)")
+    
+    clients_df = get_clients()
+    
+    if clients_df.empty:
+        st.warning("No clients found. Please create a client first in the Home page.")
+        return
+    
+    col1, col2 = st.columns([2, 1])
     
     with col1:
-        stats = execute_query(session, "SELECT COUNT(*) as count FROM CLIENTS")
-        if not stats.empty:
-            st.metric("Total Clients", stats.iloc[0]['COUNT'])
+        selected_client_name = st.selectbox(
+            "Select Client",
+            clients_df['client_name'].tolist()
+        )
+        selected_client = clients_df[clients_df['client_name'] == selected_client_name].iloc[0]
+        client_id = selected_client['client_id']
     
     with col2:
-        stats = execute_query(session, "SELECT COUNT(*) as count FROM TRAINERS")
-        if not stats.empty:
-            st.metric("Trainers", stats.iloc[0]['COUNT'])
-    
-    with col3:
-        stats = execute_query(session, "SELECT COUNT(*) as count FROM WORKOUTS WHERE date >= CURRENT_DATE - 7")
-        if not stats.empty:
-            st.metric("Workouts (7d)", stats.iloc[0]['COUNT'])
-    
-    with col4:
-        stats = execute_query(session, "SELECT COUNT(*) as count FROM RUNNING_SESSIONS WHERE date >= CURRENT_DATE - 7")
-        if not stats.empty:
-            st.metric("Running (7d)", stats.iloc[0]['COUNT'])
+        st.metric("Fitness Level", selected_client['fitness_level'])
     
     st.divider()
     
-    # Recent activity
-    st.subheader("Recent Activity")
+    tab1, tab2 = st.tabs(["Generate New Workout", "View History"])
+    
+    with tab1:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            week = st.number_input("Week Number", min_value=1, max_value=52, value=1)
+        
+        with col2:
+            day = st.number_input("Day of Week", min_value=1, max_value=7, value=1)
+        
+        if st.button("🤖 Generate Workout with AI", use_container_width=True, type="primary"):
+            with st.spinner("Generating workout using Cortex Prompt Complete..."):
+                workout_data, prompt = generate_workout_cortex(client_id, selected_client.to_dict())
+                
+                if workout_data:
+                    st.success("✅ Workout generated successfully!")
+                    
+                    # Display workout
+                    st.markdown("### Generated Workout")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Warm-up Duration", "5 min")
+                    col2.metric("Main Workout", f"{selected_client['workout_duration_min']-10} min")
+                    col3.metric("Cool-down", "5-10 min")
+                    
+                    st.markdown("#### Warm-up")
+                    st.write(workout_data.get('warm_up', 'N/A'))
+                    
+                    st.markdown("#### Main Exercises")
+                    exercises = workout_data.get('exercises', [])
+                    for i, exercise in enumerate(exercises, 1):
+                        with st.expander(f"Exercise {i}: {exercise['name']}", expanded=i==1):
+                            col1, col2, col3, col4 = st.columns(4)
+                            col1.metric("Sets", exercise['sets'])
+                            col2.metric("Reps", exercise['reps'])
+                            col3.metric("Rest (sec)", exercise.get('rest_sec', 60))
+                            st.write(f"**Notes:** {exercise.get('notes', 'N/A')}")
+                    
+                    st.markdown("#### Cool-down")
+                    st.write(workout_data.get('cool_down', 'N/A'))
+                    
+                    st.divider()
+                    
+                    if st.button("💾 Save Workout to Database", use_container_width=True):
+                        workout_id = save_workout(client_id, workout_data, prompt, week, day)
+                        if workout_id:
+                            st.success(f"✅ Workout saved! ID: {workout_id}")
+    
+    with tab2:
+        st.markdown("### Workout History")
+        workouts_df = get_client_workouts(client_id)
+        
+        if not workouts_df.empty:
+            st.dataframe(
+                workouts_df[['workout_id', 'generation_date', 'workout_week', 'workout_day', 'workout_focus']],
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No workouts generated yet. Create one using the generator above!")
+
+# ============================================================================
+# Page: Meal Plan Generator
+# ============================================================================
+
+def page_meal_plan_generator():
+    st.title("🍽️ Meal Plan Generator")
+    st.markdown("Generate personalized meal plans using AI (Cortex Prompt Complete)")
+    
+    clients_df = get_clients()
+    
+    if clients_df.empty:
+        st.warning("No clients found. Please create a client first in the Home page.")
+        return
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        selected_client_name = st.selectbox(
+            "Select Client",
+            clients_df['client_name'].tolist(),
+            key="meal_plan_client_select"
+        )
+        selected_client = clients_df[clients_df['client_name'] == selected_client_name].iloc[0]
+        client_id = selected_client['client_id']
+    
+    with col2:
+        st.metric("Target Calories", f"{selected_client.get('target_calories', 2000)} kcal")
+    
+    st.divider()
+    
+    tab1, tab2 = st.tabs(["Generate New Meal Plan", "View History"])
+    
+    with tab1:
+        week = st.number_input("Week Number", min_value=1, max_value=52, value=1, key="meal_plan_week")
+        
+        if st.button("🤖 Generate Meal Plan with AI", use_container_width=True, type="primary"):
+            with st.spinner("Generating meal plan using Cortex Prompt Complete..."):
+                meal_plan_data, prompt = generate_meal_plan_cortex(selected_client.to_dict())
+                
+                if meal_plan_data:
+                    st.success("✅ Meal plan generated successfully!")
+                    
+                    # Display meal plan
+                    st.markdown("### 7-Day Meal Plan")
+                    
+                    totals = meal_plan_data['weekly_totals']
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Total Calories", f"{totals['calories']} kcal")
+                    col2.metric("Protein", f"{totals['protein']}g")
+                    col3.metric("Carbs", f"{totals['carbs']}g")
+                    col4.metric("Fat", f"{totals['fat']}g")
+                    
+                    st.divider()
+                    
+                    for day_plan in meal_plan_data['days']:
+                        day_num = day_plan['day']
+                        st.markdown(f"#### Day {day_num}")
+                        
+                        meals = day_plan.get('meals', [])
+                        for meal in meals:
+                            meal_type = meal['meal_type'].title()
+                            with st.expander(f"{meal_type} - {meal['calories']} kcal, {meal['protein']}g protein"):
+                                for food in meal['foods']:
+                                    st.write(f"• {food}")
+                    
+                    st.divider()
+                    
+                    if st.button("💾 Save Meal Plan to Database", use_container_width=True, key="save_meal_plan"):
+                        meal_plan_id = save_meal_plan(client_id, meal_plan_data, prompt, week)
+                        if meal_plan_id:
+                            st.success(f"✅ Meal plan saved! ID: {meal_plan_id}")
+    
+    with tab2:
+        st.markdown("### Meal Plan History")
+        meal_plans_df = get_client_meal_plans(client_id)
+        
+        if not meal_plans_df.empty:
+            st.dataframe(
+                meal_plans_df[['meal_plan_id', 'generation_date', 'plan_week', 'total_calories', 'protein_g']],
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No meal plans generated yet. Create one using the generator above!")
+
+# ============================================================================
+# Page: Weight Tracking
+# ============================================================================
+
+def page_weight_tracking():
+    st.title("⚖️ Weight & Measurements Tracking")
+    st.markdown("Track client weight and body measurements over time")
+    
+    clients_df = get_clients()
+    
+    if clients_df.empty:
+        st.warning("No clients found. Please create a client first in the Home page.")
+        return
+    
+    selected_client_name = st.selectbox(
+        "Select Client",
+        clients_df['client_name'].tolist(),
+        key="weight_tracking_client"
+    )
+    selected_client = clients_df[clients_df['client_name'] == selected_client_name].iloc[0]
+    client_id = selected_client['client_id']
+    
+    st.divider()
+    
+    tab1, tab2, tab3 = st.tabs(["Record Weigh-in", "Weight History", "Body Measurements"])
+    
+    with tab1:
+        st.markdown("### Record Weight Entry")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            weigh_in_date = st.date_input("Date", value=datetime.now())
+            weight_kg = st.number_input("Weight (kg)", min_value=30.0, max_value=300.0, value=75.0, format="%.2f")
+        
+        with col2:
+            body_fat_pct = st.number_input("Body Fat %", min_value=5.0, max_value=50.0, value=20.0, format="%.1f", help="Optional")
+            notes = st.text_area("Notes (optional)", placeholder="e.g., After workout, morning weigh-in, etc.")
+        
+        if st.button("✅ Record Weigh-in", use_container_width=True, type="primary"):
+            weigh_in_id = insert_weigh_in(client_id, weigh_in_date, weight_kg, body_fat_pct, notes)
+            if weigh_in_id:
+                st.success(f"✅ Weigh-in recorded! ID: {weigh_in_id}")
+    
+    with tab2:
+        st.markdown("### Weight History")
+        weight_history = get_client_weight_history(client_id)
+        
+        if not weight_history.empty:
+            # Chart
+            fig = px.line(
+                weight_history,
+                x='weigh_in_date',
+                y='weight_kg',
+                title="Weight Trend",
+                labels={'weigh_in_date': 'Date', 'weight_kg': 'Weight (kg)'},
+                markers=True
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Data table
+            st.dataframe(weight_history, use_container_width=True, hide_index=True)
+            
+            # Statistics
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Latest Weight", f"{weight_history['weight_kg'].iloc[-1]:.2f} kg")
+            col2.metric("Starting Weight", f"{weight_history['weight_kg'].iloc[0]:.2f} kg")
+            col3.metric("Total Change", f"{weight_history['weight_kg'].iloc[-1] - weight_history['weight_kg'].iloc[0]:+.2f} kg")
+        else:
+            st.info("No weight history recorded yet. Start tracking by recording a weigh-in!")
+    
+    with tab3:
+        st.markdown("### Record Body Measurements")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            measurement_date = st.date_input("Date", value=datetime.now(), key="measurement_date")
+            neck_cm = st.number_input("Neck (cm)", min_value=20.0, max_value=50.0, value=38.0, format="%.1f")
+            chest_cm = st.number_input("Chest (cm)", min_value=70.0, max_value=150.0, value=95.0, format="%.1f")
+        
+        with col2:
+            waist_cm = st.number_input("Waist (cm)", min_value=50.0, max_value=150.0, value=75.0, format="%.1f")
+            hip_cm = st.number_input("Hip (cm)", min_value=70.0, max_value=150.0, value=92.0, format="%.1f")
+            thigh_cm = st.number_input("Thigh (cm)", min_value=35.0, max_value=80.0, value=58.0, format="%.1f")
+            calf_cm = st.number_input("Calf (cm)", min_value=25.0, max_value=50.0, value=38.0, format="%.1f")
+        
+        if st.button("✅ Record Measurements", use_container_width=True, type="primary", key="save_measurements"):
+            try:
+                measurement_id = str(uuid.uuid4())
+                insert_sql = f"""
+                INSERT INTO TRAINING_DB.PUBLIC.body_measurements
+                (measurement_id, client_id, measurement_date, neck_cm, chest_cm, waist_cm, hip_cm, thigh_cm, calf_cm)
+                SELECT
+                '{measurement_id}',
+                '{client_id}',
+                '{measurement_date}',
+                {neck_cm},
+                {chest_cm},
+                {waist_cm},
+                {hip_cm},
+                {thigh_cm},
+                {calf_cm}
+                """
+                
+                session.sql(insert_sql).collect()
+                st.success(f"✅ Measurements recorded! ID: {measurement_id}")
+            except Exception as e:
+                st.error(f"Error saving measurements: {str(e)}")
+
+# ============================================================================
+# Page: Client Profiles
+# ============================================================================
+
+def page_client_profiles():
+    st.title("👥 Client Profiles")
+    st.markdown("View and manage client profiles")
+    
+    clients_df = get_clients()
+    
+    if clients_df.empty:
+        st.info("No clients found. Create a new client to get started!")
+        return
+    
+    selected_client_name = st.selectbox(
+        "Select Client to View",
+        clients_df['client_name'].tolist(),
+        key="profile_client_select"
+    )
+    
+    selected_client = clients_df[clients_df['client_name'] == selected_client_name].iloc[0]
+    
+    st.markdown(f"## {selected_client['client_name']}")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Age", f"{selected_client['age']} years")
+    col2.metric("Height", f"{selected_client['height_cm']} cm")
+    col3.metric("Weight", f"{selected_client['current_weight_kg']:.2f} kg")
+    col4.metric("Fitness Level", selected_client['fitness_level'])
+    
+    st.divider()
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.write("**Recent Weigh-Ins**")
-        weighins = execute_query(session, """
-        SELECT 
-            c.first_name || ' ' || c.last_name as client,
-            w.date,
-            w.weight_kg
-        FROM WEIGH_INS w
-        JOIN CLIENTS c ON w.client_id = c.client_id
-        ORDER BY w.date DESC
-        LIMIT 10
-        """)
-        st.dataframe(weighins, use_container_width=True)
+        st.markdown("### Goals & Preferences")
+        st.write(f"**Fitness Goals:**")
+        goals = selected_client['fitness_goals']
+        if isinstance(goals, str):
+            import json
+            goals = json.loads(goals)
+        for goal in goals:
+            st.write(f"• {goal}")
+        
+        st.write(f"**Equipment Available:**")
+        equipment = selected_client['available_equipment']
+        if isinstance(equipment, str):
+            import json
+            equipment = json.loads(equipment)
+        for eq in equipment:
+            st.write(f"• {eq}")
     
     with col2:
-        st.write("**Recent Workouts**")
-        workouts = execute_query(session, """
-        SELECT 
-            c.first_name || ' ' || c.last_name as client,
-            w.date,
-            w.type
-        FROM WORKOUTS w
-        JOIN CLIENTS c ON w.client_id = c.client_id
-        ORDER BY w.date DESC
-        LIMIT 10
-        """)
-        st.dataframe(workouts, use_container_width=True)
+        st.markdown("### Training & Nutrition Targets")
+        st.write(f"**Training Schedule:**")
+        st.write(f"• {selected_client['days_per_week']} days per week")
+        st.write(f"• {selected_client['workout_duration_min']} minutes per session")
+        
+        st.write(f"**Nutrition Targets:**")
+        if selected_client.get('target_calories'):
+            st.write(f"• {selected_client['target_calories']} kcal/day")
+        if selected_client.get('target_protein_g'):
+            st.write(f"• {selected_client['target_protein_g']}g protein/day")
+        
+        if selected_client.get('allergies'):
+            st.write(f"**Allergies/Restrictions:**")
+            st.write(f"• {selected_client['allergies']}")
 
-# ========================================================================
-# PAGE: PROGRESS
-# ========================================================================
+# ============================================================================
+# Main Navigation
+# ============================================================================
 
-def show_progress(session: Session):
-    """Client progress tracking page."""
-    st.subheader("Client Progress")
+def main():
+    # Sidebar Navigation
+    st.sidebar.markdown("# 🏋️ AI Personal Trainer")
+    st.sidebar.markdown("*Stage 1: Workout & Meal Plan Generation*")
+    st.sidebar.divider()
     
-    clients = get_clients(session)
-    if clients.empty:
-        st.warning("No clients found")
-        return
-    
-    selected_client = st.selectbox(
-        "Select Client",
-        options=clients['CLIENT_ID'].tolist(),
-        format_func=lambda x: clients[clients['CLIENT_ID'] == x]['CLIENT_NAME'].values[0]
+    page = st.sidebar.radio(
+        "Navigation",
+        ["Home", "Workout Generator", "Meal Plan Generator", "Weight Tracking", "Client Profiles"],
+        icons=["🏠", "💪", "🍽️", "⚖️", "👥"]
     )
     
-    # Get progress data
-    progress = get_client_progress(session, selected_client)
+    st.sidebar.divider()
+    st.sidebar.markdown("### About Stage 1")
+    st.sidebar.write("""
+    This application uses **Snowflake Cortex Prompt Complete** to:
+    - Generate personalized workouts
+    - Create meal plans
+    - Track client progress
     
-    if not progress.empty:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Workouts", int(progress.iloc[0].get('TOTAL_WORKOUTS', 0)))
-        with col2:
-            st.metric("Total Running", f"{progress.iloc[0].get('TOTAL_RUNNING_DISTANCE', 0):.1f} km")
-        with col3:
-            st.metric("Latest Weight", f"{progress.iloc[0].get('LATEST_WEIGHT', 0):.1f} kg")
-    
-    # Weight trend
-    st.subheader("Weight Trend")
-    weighins = get_client_recent_weighins(session, selected_client, days=90)
-    
-    if not weighins.empty:
-        weighins['DATE'] = pd.to_datetime(weighins['DATE'])
-        weighins = weighins.sort_values('DATE')
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=weighins['DATE'],
-            y=weighins['WEIGHT_KG'],
-            mode='lines+markers',
-            name='Weight',
-            line=dict(color='#667eea', width=2),
-            marker=dict(size=8)
-        ))
-        
-        fig.update_layout(
-            title="Weight Trend (90 days)",
-            xaxis_title="Date",
-            yaxis_title="Weight (kg)",
-            hovermode='x unified',
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-# ========================================================================
-# PAGE: WEIGH-IN
-# ========================================================================
-
-def show_weighin(session: Session):
-    """Weigh-in entry page."""
-    st.subheader("Log Weigh-In")
-    
-    clients = get_clients(session)
-    if clients.empty:
-        st.warning("No clients found. Please add clients first.")
-        return
-    
-    with st.form("weighin_form"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            client_id = st.selectbox(
-                "Client",
-                options=clients['CLIENT_ID'].tolist(),
-                format_func=lambda x: clients[clients['CLIENT_ID'] == x]['CLIENT_NAME'].values[0]
-            )
-            weighin_date = st.date_input("Date", value=datetime.now().date())
-        
-        with col2:
-            weight_kg = st.number_input("Weight (kg)", min_value=30.0, max_value=300.0, step=0.1)
-            body_fat_pct = st.number_input("Body Fat %", min_value=0.0, max_value=100.0, step=0.1, value=0.0)
-        
-        muscle_mass_kg = st.number_input("Muscle Mass (kg)", min_value=0.0, max_value=300.0, step=0.1, value=0.0)
-        entry_source = st.selectbox("Entry Source", options=["manual", "device", "import"])
-        notes = st.text_area("Notes", max_chars=500)
-        
-        if st.form_submit_button("💾 Save Weigh-In"):
-            # Generate ID
-            weighin_id = f"WEIGHIN_{datetime.now().strftime('%Y%m%d%H%M%S')}_{np.random.randint(10000)}"
-            
-            # Insert into database
-            insert_query = f"""
-            INSERT INTO WEIGH_INS 
-            (weighin_id, client_id, date, weight_kg, body_fat_pct, muscle_mass_kg, 
-             entry_source, entered_by, notes, created_at)
-            VALUES (
-                '{weighin_id}',
-                '{client_id}',
-                '{weighin_date}',
-                {weight_kg},
-                {body_fat_pct if body_fat_pct > 0 else 'NULL'},
-                {muscle_mass_kg if muscle_mass_kg > 0 else 'NULL'},
-                '{entry_source}',
-                CURRENT_USER(),
-                '{notes.replace("'", "''")}',
-                CURRENT_TIMESTAMP()
-            )
-            """
-            
-            if execute_insert(session, insert_query):
-                st.success("✅ Weigh-in saved!")
-            else:
-                st.error("❌ Failed to save weigh-in")
-
-# ========================================================================
-# PAGE: WORKOUTS
-# ========================================================================
-
-def show_workouts(session: Session):
-    """Workout logging page."""
-    st.subheader("Log Workout")
-    
-    clients = get_clients(session)
-    exercises = get_exercises(session)
-    
-    if clients.empty or exercises.empty:
-        st.warning("Missing clients or exercises. Please set up data first.")
-        return
-    
-    with st.form("workout_form"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            client_id = st.selectbox(
-                "Client",
-                options=clients['CLIENT_ID'].tolist(),
-                format_func=lambda x: clients[clients['CLIENT_ID'] == x]['CLIENT_NAME'].values[0]
-            )
-            workout_date = st.date_input("Date", value=datetime.now().date())
-        
-        with col2:
-            workout_type = st.selectbox("Workout Type", options=["gym", "crossfit", "yoga", "other"])
-            start_time = st.time_input("Start Time")
-        
-        # Exercises
-        st.write("**Add Exercises**")
-        num_exercises = st.number_input("Number of exercises", min_value=1, max_value=10, value=1)
-        
-        exercises_data = []
-        for i in range(num_exercises):
-            with st.expander(f"Exercise {i+1}"):
-                exercise_id = st.selectbox(
-                    "Exercise",
-                    options=exercises['EXERCISE_ID'].tolist(),
-                    format_func=lambda x: exercises[exercises['EXERCISE_ID'] == x]['NAME'].values[0],
-                    key=f"exercise_{i}"
-                )
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    suggested_sets = st.number_input("Suggested Sets", min_value=1, value=3, key=f"sug_sets_{i}")
-                with col2:
-                    suggested_reps = st.text_input("Suggested Reps", value="8-12", key=f"sug_reps_{i}")
-                with col3:
-                    suggested_weight = st.number_input("Suggested Weight (kg)", value=0.0, key=f"sug_weight_{i}")
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    actual_sets = st.number_input("Actual Sets", min_value=1, value=3, key=f"act_sets_{i}")
-                with col2:
-                    actual_reps = st.text_input("Actual Reps", value="8-12", key=f"act_reps_{i}")
-                with col3:
-                    actual_weight = st.number_input("Actual Weight (kg)", value=0.0, key=f"act_weight_{i}")
-                
-                rpe = st.slider("RPE (Perceived Exertion)", 1, 10, 5, key=f"rpe_{i}")
-                
-                exercises_data.append({
-                    'exercise_id': exercise_id,
-                    'suggested_sets': suggested_sets,
-                    'suggested_reps': suggested_reps,
-                    'suggested_weight_kg': suggested_weight,
-                    'actual_sets': actual_sets,
-                    'actual_reps': actual_reps,
-                    'actual_weight_kg': actual_weight,
-                    'rpe': rpe
-                })
-        
-        notes = st.text_area("Workout Notes", max_chars=1000)
-        
-        if st.form_submit_button("💾 Save Workout"):
-            # Generate workout ID
-            workout_id = f"WO_{datetime.now().strftime('%Y%m%d%H%M%S')}_{np.random.randint(10000)}"
-            
-            # Insert workout
-            insert_query = f"""
-            INSERT INTO WORKOUTS 
-            (workout_id, client_id, date, start_time, type, notes, created_at)
-            VALUES (
-                '{workout_id}',
-                '{client_id}',
-                '{workout_date}',
-                '{start_time}',
-                '{workout_type}',
-                '{notes.replace("'", "''")}',
-                CURRENT_TIMESTAMP()
-            )
-            """
-            
-            if execute_insert(session, insert_query):
-                st.success("✅ Workout saved!")
-            else:
-                st.error("❌ Failed to save workout")
-
-# ========================================================================
-# PAGE: RUNNING
-# ========================================================================
-
-def show_running(session: Session):
-    """Running session logging page."""
-    st.subheader("Log Running Session")
-    
-    clients = get_clients(session)
-    if clients.empty:
-        st.warning("No clients found")
-        return
-    
-    with st.form("running_form"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            client_id = st.selectbox(
-                "Client",
-                options=clients['CLIENT_ID'].tolist(),
-                format_func=lambda x: clients[clients['CLIENT_ID'] == x]['CLIENT_NAME'].values[0]
-            )
-            session_date = st.date_input("Date", value=datetime.now().date())
-        
-        with col2:
-            suggested_type = st.selectbox("Run Type", options=["easy", "tempo", "intervals", "long", "recovery", "speed_work"])
-            suggested_distance = st.number_input("Suggested Distance (km)", value=5.0, step=0.1)
-        
-        suggested_pace_sec = st.number_input("Suggested Pace (sec/km)", value=300, step=10)
-        
-        st.divider()
-        st.write("**Actual Performance**")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            actual_distance = st.number_input("Actual Distance (km)", value=5.0, step=0.1)
-            actual_type = st.selectbox("Actual Run Type", options=["easy", "tempo", "intervals", "long", "recovery", "speed_work"])
-        
-        with col2:
-            actual_duration = st.number_input("Actual Duration (seconds)", value=1500, step=10)
-            calories = st.number_input("Calories (optional)", value=0, step=10)
-        
-        device = st.text_input("Device/App", placeholder="e.g., Strava, Apple Watch")
-        notes = st.text_area("Notes", max_chars=500)
-        
-        if st.form_submit_button("💾 Save Running Session"):
-            # Calculate actual pace
-            if actual_distance > 0:
-                actual_pace_sec = actual_duration / actual_distance
-            else:
-                actual_pace_sec = 0
-            
-            run_id = f"RUN_{datetime.now().strftime('%Y%m%d%H%M%S')}_{np.random.randint(10000)}"
-            
-            insert_query = f"""
-            INSERT INTO RUNNING_SESSIONS
-            (run_id, client_id, date, suggested_distance_km, suggested_pace_sec_per_km, 
-             suggested_type, actual_distance_km, actual_duration_sec, actual_pace_sec_per_km, 
-             actual_type, calories, device, notes, created_at)
-            VALUES (
-                '{run_id}',
-                '{client_id}',
-                '{session_date}',
-                {suggested_distance},
-                {suggested_pace_sec},
-                '{suggested_type}',
-                {actual_distance},
-                {actual_duration},
-                {actual_pace_sec:.2f},
-                '{actual_type}',
-                {calories if calories > 0 else 'NULL'},
-                '{device.replace("'", "''")}',
-                '{notes.replace("'", "''")}',
-                CURRENT_TIMESTAMP()
-            )
-            """
-            
-            if execute_insert(session, insert_query):
-                st.success("✅ Running session saved!")
-            else:
-                st.error("❌ Failed to save running session")
-
-# ========================================================================
-# PAGE: NUTRITION
-# ========================================================================
-
-def show_nutrition(session: Session):
-    """Nutrition logging page."""
-    st.subheader("Nutrition Tracking")
-    
-    clients = get_clients(session)
-    if clients.empty:
-        st.warning("No clients found")
-        return
-    
-    st.info("Nutrition tracking features coming soon!")
-
-# ========================================================================
-# PAGE: SETTINGS
-# ========================================================================
-
-def show_settings(session: Session):
-    """Settings and configuration page."""
-    st.subheader("Settings")
-    
-    # Database info
-    st.write("**Database Configuration**")
-    db_info = execute_query(session, "SELECT CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_USER(), CURRENT_ROLE()")
-    
-    if not db_info.empty:
-        row = db_info.iloc[0]
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Database", row[0])
-            st.metric("User", row[2])
-        with col2:
-            st.metric("Schema", row[1])
-            st.metric("Role", row[3])
-    
-    st.divider()
-    
-    # Data management
-    st.write("**Data Management**")
-    if st.button("🔄 Refresh Cache"):
-        st.cache_resource.clear()
-        st.success("Cache refreshed!")
-    
-    st.divider()
-    
-    # System info
-    st.write("**System Information**")
-    sys_info = execute_query(session, """
-    SELECT 
-        COUNT(*) as total_tables,
-        CURRENT_TIMESTAMP() as server_time
-    FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_SCHEMA = 'PUBLIC'
+    All data is stored securely in Snowflake.
     """)
     
-    if not sys_info.empty:
-        st.write(sys_info)
-
-# ========================================================================
-# RUN APPLICATION
-# ========================================================================
+    # Route to pages
+    if page == "Home":
+        page_home()
+    elif page == "Workout Generator":
+        page_workout_generator()
+    elif page == "Meal Plan Generator":
+        page_meal_plan_generator()
+    elif page == "Weight Tracking":
+        page_weight_tracking()
+    elif page == "Client Profiles":
+        page_client_profiles()
 
 if __name__ == "__main__":
     main()
