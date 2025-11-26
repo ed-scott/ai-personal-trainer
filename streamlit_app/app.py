@@ -876,7 +876,7 @@ def page_meal_plan_generator():
         
         if not meal_plans_df.empty:
             st.dataframe(
-                meal_plans_df[['meal_plan_id', 'generation_date', 'plan_week', 'total_calories', 'protein_g']],
+                meal_plans_df[['MEAL_PLAN_ID', 'GENERATION_DATE', 'PLAN_WEEK', 'TOTAL_CALORIES', 'PROTEIN_G']],
                 use_container_width=True,
                 hide_index=True
             )
@@ -1284,7 +1284,7 @@ def page_meal_plan_summary():
         # Raw data table
         st.markdown("### Raw Data")
         st.dataframe(
-            meal_plans_df[['meal_plan_id', 'generation_date', 'plan_start_date', 'plan_week', 'total_calories', 'protein_g', 'carbs_g', 'fat_g']],
+            meal_plans_df[['MEAL_PLAN_ID', 'GENERATION_DATE', 'PLAN_START_DATE', 'PLAN_WEEK', 'TOTAL_CALORIES', 'PROTEIN_G', 'CARBS_G', 'FAT_G']],
             use_container_width=True,
             hide_index=True
         )
