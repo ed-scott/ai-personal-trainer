@@ -1,0 +1,30 @@
+[theme]
+# Streamlit theme configuration
+primaryColor = "#667eea"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+font = "sans serif"
+
+[client]
+# Client-side settings
+showErrorDetails = true
+toolbarMode = "viewer"
+
+[logger]
+# Logging configuration
+level = "info"
+messageFormat = "%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s"
+
+[server]
+# Server settings
+maxUploadSize = 200
+maxMessageSize = 200
+port = 8501
+headless = false
+runOnSave = true
+
+[browser]
+# Browser settings
+gatherUsageStats = false
+serverAddress = "localhost"
