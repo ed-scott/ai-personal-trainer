@@ -33,7 +33,7 @@ GRANT READ ON SECRET ai_personal_trainer_git_secret TO ROLE TRAINING_APP_ADMIN;
 CREATE GIT REPOSITORY IF NOT EXISTS ai_personal_trainer_repo
   API_PROVIDER = 'GITHUB'
   GIT_CREDENTIALS_SECRET = ai_personal_trainer_git_secret
-  ORIGIN = 'PLACEHOLDER_GITHUB_REPO_URL'
+  ORIGIN = 'https://github.com/ed-scott/ai-personal-trainer.git'
   COMMENT = 'Git repository for AI Personal Trainer Streamlit application'
 ;
 
@@ -62,7 +62,7 @@ GRANT USAGE ON STAGE streamlit_app_stage TO ROLE TRAINING_APP_ADMIN;
 -- Use ACCOUNTADMIN to create the Streamlit object
 -- This uses the Git repository instead of internal stage
 CREATE STREAMLIT IF NOT EXISTS training_db.public.ai_personal_trainer
-  FROM GIT REPOSITORY ai_personal_trainer_repo
+  FROM @ai_personal_trainer_repo/branches/main/streamlit_app
   MAIN_FILE = '/streamlit_app/app.py'
   QUERY_WAREHOUSE = training_wh
   TITLE = 'AI Personal Trainer - Stage 1'
