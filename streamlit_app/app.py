@@ -29,7 +29,7 @@ st.set_page_config(
 @st.cache_resource
 def get_snowpark_session():
     """Initialize and cache Snowpark session"""
-    return Session.builder.configs(st.secrets["snowflake"]).create()
+    return Session.builder.getOrCreate()
 
 session = get_snowpark_session()
 
@@ -50,8 +50,8 @@ def log_event(event_type: str, client_id: str = None, message: str = None, conte
         insert_sql = f"""
         INSERT INTO TRAINING_DB.PUBLIC.app_logs 
         (log_id, event_type, severity, client_id, message, context)
-        VALUES ('{log_id}', '{event_type}', 'INFO', {f"'{client_id}'" if client_id else 'NULL'}, 
-                {f"'{message}'" if message else 'NULL'}, PARSE_JSON('{context_json}'))
+        SELECT '{log_id}', '{event_type}', 'INFO', {f"'{client_id}'" if client_id else 'NULL'}, 
+                {f"'{message}'" if message else 'NULL'}, TRY_PARSE_JSON('{context_json}')
         """
         session.sql(insert_sql).collect()
     except Exception as e:
@@ -79,45 +79,148 @@ def insert_client(client_data: dict):
         SELECT
         '{client_id}',
         '{client_data['client_name']}',
-        {client_data['age']},
+        {client_data['AGE']},
         '{client_data['gender']}',
-        {client_data['current_weight_kg']},
-        {client_data['height_cm']},
-        '{client_data['fitness_level']}',
-        PARSE_JSON('{json.dumps(client_data['fitness_goals'])}'),
-        PARSE_JSON('{json.dumps(client_data['available_equipment'])}'),
-        {client_data['days_per_week']},
-        {client_data['workout_duration_min']},
-        PARSE_JSON('{json.dumps(client_data['dietary_preferences'])}'),
+        {client_data['CURRENT_WEIGHT_KG']},
+        {client_data['HEIGHT_CM']},
+        '{client_data['FITNESS_LEVEL']}',
+        TRY_PARSE_JSON('{json.dumps(client_data['FITNESS_GOALS'])}'),
+        TRY_PARSE_JSON('{json.dumps(client_data['AVAILABLE_EQUIPMENT'])}'),
+        {client_data['DAYS_PER_WEEK']},
+        {client_data['WORKOUT_DURATION_MIN']},
+        PARSE_JSON('{json.dumps(client_data['DIETARY_PREFERENCES'])}'),
         {f"'{client_data['allergies']}'" if client_data['allergies'] else 'NULL'},
         {client_data['target_calories'] if client_data['target_calories'] else 'NULL'},
         {client_data['target_protein_g'] if client_data['target_protein_g'] else 'NULL'}
         """
         
         session.sql(insert_sql).collect()
+        st.stop()
         log_event("client_created", client_id=client_id, message=f"Client {client_data['client_name']} created")
         return client_id
     except Exception as e:
         st.error(f"Error creating client: {str(e)}")
         return None
 
+def get_previous_workouts_context(client_id: str, weeks: int = 4):
+    """Get previous workouts to provide context for AI generation"""
+    try:
+        df = session.sql(f"""
+        SELECT workout_week, workout_day, workout_focus, exercises, duration_min
+        FROM TRAINING_DB.PUBLIC.generated_workouts
+        WHERE client_id = '{client_id}'
+        ORDER BY generation_date DESC
+        LIMIT {weeks * 7}
+        """).to_pandas()
+        
+        if df.empty:
+            return "No previous workouts found. This will be the first training program."
+        
+        # Summarize previous workouts
+        context_lines = ["Previous Workouts (Last 4 Weeks):"]
+        workout_dict = {}
+        
+        for _, row in df.iterrows():
+            week = row['WORKOUT_WEEK']
+            day = row['WORKOUT_DAY']
+            key = f"Week {week}, Day {day}"
+            if key not in workout_dict:
+                workout_dict[key] = {
+                    'focus': row['WORKOUT_FOCUS'],
+                    'duration': row['DURATION_MIN'],
+                    'exercises': row['EXERCISES']
+                }
+        
+        for key in sorted(workout_dict.keys(), reverse=True)[:16]:  # Last 4 weeks
+            workout = workout_dict[key]
+            context_lines.append(f"- {key}: {workout['focus']} ({workout['duration']}min)")
+        
+        return "\n".join(context_lines)
+    except Exception as e:
+        st.warning(f"Could not retrieve previous workouts: {str(e)}")
+        return "No previous workouts available."
+
+def generate_full_week_workouts_cortex(client_id: str, client_data: dict, week: int = 1):
+    """Generate a full week of workouts (7 days including rest days) using Cortex Prompt Complete"""
+    try:
+        # Get context from previous workouts
+        previous_context = get_previous_workouts_context(client_id, weeks=4)
+        
+        # Build prompt from client data
+        fitness_goals = ', '.join(client_data['FITNESS_GOALS']) if isinstance(client_data['FITNESS_GOALS'], list) else client_data['FITNESS_GOALS']
+        equipment = ', '.join(client_data['AVAILABLE_EQUIPMENT']) if isinstance(client_data['AVAILABLE_EQUIPMENT'], list) else client_data['AVAILABLE_EQUIPMENT']
+        
+        prompt = f"""You are an expert personal trainer creating a complete 7-day training program.
+
+=== CLIENT PROFILE ===
+- Fitness Level: {client_data['FITNESS_LEVEL']}
+- Goals: {fitness_goals}
+- Available Equipment: {equipment}
+- Training Days per Week: {client_data['DAYS_PER_WEEK']}
+- Workout Duration: {client_data['WORKOUT_DURATION_MIN']} minutes per session
+
+=== CONTEXT FROM PREVIOUS TRAINING ===
+{previous_context}
+
+=== IMPORTANT INSTRUCTIONS ===
+1. Create a diverse training program where each training day focuses on different muscle groups
+2. Include {client_data['DAYS_PER_WEEK']} training days and {7 - client_data['DAYS_PER_WEEK']} rest days
+3. ENSURE THE WORKOUTS ARE SIGNIFICANTLY DIFFERENT from the previous weeks shown above
+4. Vary the exercises, rep ranges, and training focus across the week
+5. Include proper warm-up and cool-down for each training day
+6. Space out muscle groups to allow for recovery (e.g., no back-to-back same muscle groups)
+7. Rest days should be labeled with recovery recommendations
+
+Format EXACTLY as this JSON (no extra text):
+{{
+  "week": {week},
+  "days": [
+    {{"day": 1, "day_name": "Monday", "is_rest_day": false, "focus": "Upper Body", "warm_up": "5 min", "exercises": [{{"name": "Ex1", "sets": 3, "reps": "8-10", "rest_sec": 90, "notes": "notes"}}], "cool_down": "stretch"}},
+    {{"day": 2, "day_name": "Tuesday", "is_rest_day": true, "recovery_tips": "Light activity"}}
+  ]
+}}"""
+        
+        # Call Cortex
+        cortex_sql = f"""
+        SELECT SNOWFLAKE.CORTEX.COMPLETE(
+            'mistral-7b',
+            '{prompt}'
+        ) AS response
+        """
+        
+        result = session.sql(cortex_sql).collect()
+        response_text = result[0][0]
+        
+        # Parse JSON from response
+        import re
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            workout_json = json.loads(json_match.group())
+        else:
+            workout_json = json.loads(response_text)
+        
+        return workout_json, prompt
+    except Exception as e:
+        st.error(f"Error generating weekly workout with Cortex: {str(e)}")
+        return None, None
+
 def generate_workout_cortex(client_id: str, client_data: dict):
-    """Generate workout using Cortex Prompt Complete"""
+    """Generate workout using Cortex Prompt Complete (Legacy - single day)"""
     try:
         # Build prompt from client data
-        fitness_goals = ', '.join(client_data['fitness_goals']) if isinstance(client_data['fitness_goals'], list) else client_data['fitness_goals']
-        equipment = ', '.join(client_data['available_equipment']) if isinstance(client_data['available_equipment'], list) else client_data['available_equipment']
+        fitness_goals = ', '.join(client_data['FITNESS_GOALS']) if isinstance(client_data['FITNESS_GOALS'], list) else client_data['FITNESS_GOALS']
+        equipment = ', '.join(client_data['AVAILABLE_EQUIPMENT']) if isinstance(client_data['AVAILABLE_EQUIPMENT'], list) else client_data['AVAILABLE_EQUIPMENT']
         
         prompt = f"""You are an expert personal trainer. Generate a detailed workout plan for a client.
 
 Client Profile:
-- Fitness Level: {client_data['fitness_level']}
+- Fitness Level: {client_data['FITNESS_LEVEL']}
 - Goals: {fitness_goals}
 - Available Equipment: {equipment}
-- Days Available per Week: {client_data['days_per_week']}
-- Preferred Duration: {client_data['workout_duration_min']} minutes
+- Days Available per Week: {client_data['DAYS_PER_WEEK']}
+- Preferred Duration: {client_data['WORKOUT_DURATION_MIN']} minutes
 
-Generate a complete {client_data['workout_duration_min']}-minute workout including:
+Generate a complete {client_data['WORKOUT_DURATION_MIN']}-minute workout including:
 1. Warm-up (5 minutes)
 2. Main exercises with sets, reps, and rest periods (appropriate to their fitness level)
 3. Cool-down (5-10 minutes)
@@ -144,7 +247,6 @@ Format EXACTLY as this JSON structure (no extra text before or after):
         response_text = result[0][0]
         
         # Parse JSON from response
-        # Try to extract JSON from response text
         import re
         json_match = re.search(r'\{[\s\S]*\}', response_text)
         if json_match:
@@ -160,8 +262,8 @@ Format EXACTLY as this JSON structure (no extra text before or after):
 def generate_meal_plan_cortex(client_data: dict):
     """Generate meal plan using Cortex Prompt Complete"""
     try:
-        fitness_goals = ', '.join(client_data['fitness_goals']) if isinstance(client_data['fitness_goals'], list) else client_data['fitness_goals']
-        dietary_prefs = ', '.join(client_data['dietary_preferences']) if isinstance(client_data['dietary_preferences'], list) else client_data['dietary_preferences']
+        fitness_goals = ', '.join(client_data['FITNESS_GOALS']) if isinstance(client_data['FITNESS_GOALS'], list) else client_data['FITNESS_GOALS']
+        dietary_prefs = ', '.join(client_data['DIETARY_PREFERENCES']) if isinstance(client_data['DIETARY_PREFERENCES'], list) else client_data['DIETARY_PREFERENCES']
         
         target_calories = client_data.get('target_calories', 2000)
         target_protein = client_data.get('target_protein_g', 150)
@@ -219,7 +321,7 @@ Format EXACTLY as this JSON structure (no extra text before or after):
         return None, None
 
 def save_workout(client_id: str, workout_data: dict, prompt: str, week: int = 1, day: int = 1):
-    """Save generated workout to database"""
+    """Save a single day's workout to database"""
     try:
         workout_id = generate_uuid()
         
@@ -232,21 +334,88 @@ def save_workout(client_id: str, workout_data: dict, prompt: str, week: int = 1,
         '{client_id}',
         {week},
         {day},
-        'Generated Workout',
+        '{workout_data.get('focus', 'Generated Workout').replace("'", "''")}',
         60,
-        '{workout_data['warm_up'].replace("'", "''")}',
-        PARSE_JSON('{json.dumps(workout_data['exercises'])}'),
-        '{workout_data['cool_down'].replace("'", "''")}',
+        '{workout_data.get('warm_up', '').replace("'", "''")}',
+        PARSE_JSON('{json.dumps(workout_data.get('exercises', []))}'),
+        '{workout_data.get('cool_down', '').replace("'", "''")}',
         '{prompt.replace("'", "''")}',
         'mistral-7b'
         """
         
         session.sql(insert_sql).collect()
-        log_event("workout_generated", client_id=client_id, message="Workout generated and saved")
+        log_event("workout_generated", client_id=client_id, message=f"Workout Day {day} Week {week} saved")
         return workout_id
     except Exception as e:
         st.error(f"Error saving workout: {str(e)}")
         return None
+
+def save_weekly_workouts(client_id: str, weekly_data: dict, prompt: str):
+    """Save all workouts from a full week to database"""
+    try:
+        week = weekly_data.get('week', 1)
+        saved_count = 0
+        
+        for day_data in weekly_data.get('days', []):
+            day_num = day_data.get('day', 1)
+            
+            if day_data.get('is_rest_day', False):
+                # Save rest day as a special entry
+                workout_id = generate_uuid()
+                recovery_tips = day_data.get('recovery_tips', 'Rest day')
+                
+                insert_sql = f"""
+                INSERT INTO TRAINING_DB.PUBLIC.generated_workouts
+                (workout_id, client_id, workout_week, workout_day, workout_focus, duration_min,
+                 warm_up, exercises, cool_down, cortex_prompt, cortex_model)
+                SELECT
+                '{workout_id}',
+                '{client_id}',
+                {week},
+                {day_num},
+                'Rest Day',
+                0,
+                '{recovery_tips.replace("'", "''")}',
+                PARSE_JSON('[]'),
+                'Focus on recovery',
+                '{prompt.replace("'", "''")}',
+                'mistral-7b'
+                """
+            else:
+                # Save training day
+                workout_id = generate_uuid()
+                focus = day_data.get('focus', 'Generated Workout')
+                warm_up = day_data.get('warm_up', '')
+                exercises = day_data.get('exercises', [])
+                cool_down = day_data.get('cool_down', '')
+                
+                insert_sql = f"""
+                INSERT INTO TRAINING_DB.PUBLIC.generated_workouts
+                (workout_id, client_id, workout_week, workout_day, workout_focus, duration_min,
+                 warm_up, exercises, cool_down, cortex_prompt, cortex_model)
+                SELECT
+                '{workout_id}',
+                '{client_id}',
+                {week},
+                {day_num},
+                '{focus.replace("'", "''")}',
+                60,
+                '{warm_up.replace("'", "''")}',
+                PARSE_JSON('{json.dumps(exercises)}'),
+                '{cool_down.replace("'", "''")}',
+                '{prompt.replace("'", "''")}',
+                'mistral-7b'
+                """
+            
+            session.sql(insert_sql).collect()
+            saved_count += 1
+        
+        log_event("weekly_workouts_generated", client_id=client_id, 
+                 message=f"Week {week} with {saved_count} days saved")
+        return saved_count
+    except Exception as e:
+        st.error(f"Error saving weekly workouts: {str(e)}")
+        return 0
 
 def save_meal_plan(client_id: str, meal_plan_data: dict, prompt: str, week: int = 1):
     """Save generated meal plan to database"""
@@ -402,17 +571,17 @@ def page_home():
                     st.error("Please enter a client name")
                 else:
                     client_data = {
-                        'client_name': client_name,
-                        'age': age,
-                        'gender': gender,
-                        'current_weight_kg': current_weight_kg,
-                        'height_cm': height_cm,
-                        'fitness_level': fitness_level,
-                        'fitness_goals': fitness_goals,
-                        'available_equipment': available_equipment,
-                        'days_per_week': days_per_week,
-                        'workout_duration_min': workout_duration_min,
-                        'dietary_preferences': dietary_preferences,
+                        'CLIENT_NAME': client_name,
+                        'AGE': age,
+                        'GENDER': gender,
+                        'CURRENT_WEIGHT_KG': current_weight_kg,
+                        'HEIGHT_CM': height_cm,
+                        'FITNESS_LEVEL': fitness_level,
+                        'FITNESS_GOALS': fitness_goals,
+                        'AVAILABLE_EQUIPMENT': available_equipment,
+                        'DAYS_PER_WEEK': days_per_week,
+                        'WORKOUT_DURATION_MIN': workout_duration_min,
+                        'DIETARY_PREFERENCES': dietary_preferences,
                         'allergies': allergies,
                         'target_calories': target_calories,
                         'target_protein_g': target_protein_g
@@ -429,7 +598,7 @@ def page_home():
         
         if not clients_df.empty:
             st.dataframe(
-                clients_df[['client_id', 'client_name', 'age', 'fitness_level', 'current_weight_kg', 'created_at']],
+                clients_df[['CLIENT_ID', 'CLIENT_NAME', 'AGE', 'FITNESS_LEVEL', 'CURRENT_WEIGHT_KG', 'CREATED_AT']],
                 use_container_width=True,
                 hide_index=True
             )
@@ -441,8 +610,8 @@ def page_home():
 # ============================================================================
 
 def page_workout_generator():
-    st.title("💪 Workout Generator")
-    st.markdown("Generate personalized workouts using AI (Cortex Prompt Complete)")
+    st.title("💪 Workout Generator - Full Week Planning")
+    st.markdown("Generate a complete 7-day training program with AI (Cortex Prompt Complete)")
     
     clients_df = get_clients()
     
@@ -450,69 +619,126 @@ def page_workout_generator():
         st.warning("No clients found. Please create a client first in the Home page.")
         return
     
-    col1, col2 = st.columns([2, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
     
     with col1:
         selected_client_name = st.selectbox(
             "Select Client",
-            clients_df['client_name'].tolist()
+            clients_df['CLIENT_NAME'].tolist()
         )
-        selected_client = clients_df[clients_df['client_name'] == selected_client_name].iloc[0]
-        client_id = selected_client['client_id']
+        selected_client = clients_df[clients_df['CLIENT_NAME'] == selected_client_name].iloc[0]
+        client_id = selected_client['CLIENT_ID']
     
     with col2:
-        st.metric("Fitness Level", selected_client['fitness_level'])
+        st.metric("Fitness Level", selected_client['FITNESS_LEVEL'])
+    
+    with col3:
+        st.metric("Training Days/Week", selected_client['DAYS_PER_WEEK'])
     
     st.divider()
     
-    tab1, tab2 = st.tabs(["Generate New Workout", "View History"])
+    tab1, tab2 = st.tabs(["Generate Full Week", "View History"])
     
     with tab1:
-        col1, col2 = st.columns(2)
+        st.markdown("### Generate a Full 7-Day Training Program")
+        st.info("💡 The AI will review your last 4 weeks of training and create a NEW program with varied exercises and focuses to prevent plateaus.")
         
-        with col1:
-            week = st.number_input("Week Number", min_value=1, max_value=52, value=1)
+        week = st.number_input("Week Number", min_value=1, max_value=52, value=1, help="Which week of the program is this?")
         
-        with col2:
-            day = st.number_input("Day of Week", min_value=1, max_value=7, value=1)
-        
-        if st.button("🤖 Generate Workout with AI", use_container_width=True, type="primary"):
-            with st.spinner("Generating workout using Cortex Prompt Complete..."):
-                workout_data, prompt = generate_workout_cortex(client_id, selected_client.to_dict())
+        if st.button("🤖 Generate Full Week with AI", use_container_width=True, type="primary"):
+            with st.spinner("Analyzing previous workouts and generating new full-week program..."):
+                # First show context
+                with st.status("Reviewing previous 4 weeks of training...", expanded=False) as status:
+                    context = get_previous_workouts_context(client_id, weeks=4)
+                    st.write(context)
+                    status.update(label="✅ Context reviewed", state="complete")
                 
-                if workout_data:
-                    st.success("✅ Workout generated successfully!")
+                # Generate full week
+                with st.status("Generating full week with AI...", expanded=True) as status:
+                    st.session_state.weekly_data, prompt = generate_full_week_workouts_cortex(
+                        client_id, 
+                        selected_client.to_dict(),
+                        week=week
+                    )
+                    status.update(label="✅ Week generated", state="complete")
+                
+                if st.session_state.weekly_data:
+                    st.success("✅ Full week program generated successfully!")
                     
-                    # Display workout
-                    st.markdown("### Generated Workout")
+                    # Display full week overview
+                    st.markdown(f"### 📅 Week {week} Training Program")
                     
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Warm-up Duration", "5 min")
-                    col2.metric("Main Workout", f"{selected_client['workout_duration_min']-10} min")
-                    col3.metric("Cool-down", "5-10 min")
+                    # Create a summary table
+                    week_summary = []
+                    for day_data in st.session_state.weekly_data.get('days', []):
+                        day_name = day_data.get('day_name', f"Day {day_data.get('day')}")
+                        if day_data.get('is_rest_day', False):
+                            week_summary.append({
+                                'Day': day_name,
+                                'Type': '🔄 Rest',
+                                'Focus': 'Recovery',
+                                'Exercises': '-'
+                            })
+                        else:
+                            focus = day_data.get('focus', 'Training')
+                            exercises = day_data.get('exercises', [])
+                            week_summary.append({
+                                'Day': day_name,
+                                'Type': '💪 Training',
+                                'Focus': focus,
+                                'Exercises': len(exercises)
+                            })
                     
-                    st.markdown("#### Warm-up")
-                    st.write(workout_data.get('warm_up', 'N/A'))
-                    
-                    st.markdown("#### Main Exercises")
-                    exercises = workout_data.get('exercises', [])
-                    for i, exercise in enumerate(exercises, 1):
-                        with st.expander(f"Exercise {i}: {exercise['name']}", expanded=i==1):
-                            col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("Sets", exercise['sets'])
-                            col2.metric("Reps", exercise['reps'])
-                            col3.metric("Rest (sec)", exercise.get('rest_sec', 60))
-                            st.write(f"**Notes:** {exercise.get('notes', 'N/A')}")
-                    
-                    st.markdown("#### Cool-down")
-                    st.write(workout_data.get('cool_down', 'N/A'))
+                    summary_df = pd.DataFrame(week_summary)
+                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
                     
                     st.divider()
                     
-                    if st.button("💾 Save Workout to Database", use_container_width=True):
-                        workout_id = save_workout(client_id, workout_data, prompt, week, day)
-                        if workout_id:
-                            st.success(f"✅ Workout saved! ID: {workout_id}")
+                    # Display each day
+                    st.markdown("### Detailed Daily Workouts")
+                    
+                    for day_data in st.session_state.weekly_data.get('days', []):
+                        day_num = day_data.get('day', 1)
+                        day_name = day_data.get('day_name', f"Day {day_num}")
+                        
+                        if day_data.get('is_rest_day', False):
+                            with st.expander(f"📅 {day_name} - 🔄 Rest Day", expanded=False):
+                                st.info(f"Recovery Tips: {day_data.get('recovery_tips', 'Take a well-deserved break!')}")
+                        else:
+                            focus = day_data.get('focus', 'Training')
+                            with st.expander(f"📅 {day_name} - 💪 {focus}", expanded=day_num==1):
+                                col1, col2, col3 = st.columns(3)
+                                col1.metric("Warm-up", "5 min")
+                                col2.metric("Main Workout", "~45 min")
+                                col3.metric("Cool-down", "10 min")
+                                
+                                st.markdown("**Warm-up:**")
+                                st.write(day_data.get('warm_up', 'N/A'))
+                                
+                                st.markdown("**Main Exercises:**")
+                                exercises = day_data.get('exercises', [])
+                                for i, exercise in enumerate(exercises, 1):
+                                    with st.expander(f"Exercise {i}: {exercise.get('name', 'N/A')}"):
+                                        col1, col2, col3, col4 = st.columns(4)
+                                        col1.metric("Sets", exercise.get('sets', 3))
+                                        col2.metric("Reps", exercise.get('reps', '8-10'))
+                                        col3.metric("Rest (sec)", exercise.get('rest_sec', 60))
+                                        col4.metric("Notes", "See below")
+                                        st.write(exercise.get('notes', 'Form cues TBD'))
+                                
+                                st.markdown("**Cool-down:**")
+                                st.write(day_data.get('cool_down', 'N/A'))
+                    
+                    st.divider()
+                    
+                    # Save button
+                    if st.button("💾 Save Full Week to Database", use_container_width=True, type="primary"):
+                        with st.spinner("Saving all 7 days to database..."):
+                            saved_count = save_weekly_workouts(client_id, st.session_state.weekly_data, prompt)
+                            if saved_count > 0:
+                                st.success(f"✅ Full week saved! {saved_count} workout days stored in database.")
+                                if 'weekly_data' in st.session_state:
+                                    del st.session_state.weekly_data
     
     with tab2:
         st.markdown("### Workout History")
@@ -520,12 +746,12 @@ def page_workout_generator():
         
         if not workouts_df.empty:
             st.dataframe(
-                workouts_df[['workout_id', 'generation_date', 'workout_week', 'workout_day', 'workout_focus']],
+                workouts_df[['WORKOUT_ID', 'GENERATION_DATE', 'WORKOUT_WEEK', 'WORKOUT_DAY', 'WORKOUT_FOCUS']],
                 use_container_width=True,
                 hide_index=True
             )
         else:
-            st.info("No workouts generated yet. Create one using the generator above!")
+            st.info("No workouts generated yet. Create a full week program using the generator above!")
 
 # ============================================================================
 # Page: Meal Plan Generator
@@ -546,11 +772,11 @@ def page_meal_plan_generator():
     with col1:
         selected_client_name = st.selectbox(
             "Select Client",
-            clients_df['client_name'].tolist(),
+            clients_df['CLIENT_NAME'].tolist(),
             key="meal_plan_client_select"
         )
-        selected_client = clients_df[clients_df['client_name'] == selected_client_name].iloc[0]
-        client_id = selected_client['client_id']
+        selected_client = clients_df[clients_df['CLIENT_NAME'] == selected_client_name].iloc[0]
+        client_id = selected_client['CLIENT_ID']
     
     with col2:
         st.metric("Target Calories", f"{selected_client.get('target_calories', 2000)} kcal")
@@ -628,11 +854,11 @@ def page_weight_tracking():
     
     selected_client_name = st.selectbox(
         "Select Client",
-        clients_df['client_name'].tolist(),
+        clients_df['CLIENT_NAME'].tolist(),
         key="weight_tracking_client"
     )
-    selected_client = clients_df[clients_df['client_name'] == selected_client_name].iloc[0]
-    client_id = selected_client['client_id']
+    selected_client = clients_df[clients_df['CLIENT_NAME'] == selected_client_name].iloc[0]
+    client_id = selected_client['CLIENT_ID']
     
     st.divider()
     
@@ -738,19 +964,19 @@ def page_client_profiles():
     
     selected_client_name = st.selectbox(
         "Select Client to View",
-        clients_df['client_name'].tolist(),
+        clients_df['CLIENT_NAME'].tolist(),
         key="profile_client_select"
     )
     
-    selected_client = clients_df[clients_df['client_name'] == selected_client_name].iloc[0]
+    selected_client = clients_df[clients_df['CLIENT_NAME'] == selected_client_name].iloc[0]
     
-    st.markdown(f"## {selected_client['client_name']}")
+    st.markdown(f"## {selected_client['CLIENT_NAME']}")
     
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Age", f"{selected_client['age']} years")
-    col2.metric("Height", f"{selected_client['height_cm']} cm")
-    col3.metric("Weight", f"{selected_client['current_weight_kg']:.2f} kg")
-    col4.metric("Fitness Level", selected_client['fitness_level'])
+    col1.metric("Age", f"{selected_client['AGE']} years")
+    col2.metric("Height", f"{selected_client['HEIGHT_CM']} cm")
+    col3.metric("Weight", f"{selected_client['CURRENT_WEIGHT_KG']:.2f} kg")
+    col4.metric("Fitness Level", selected_client['FITNESS_LEVEL'])
     
     st.divider()
     
@@ -759,7 +985,7 @@ def page_client_profiles():
     with col1:
         st.markdown("### Goals & Preferences")
         st.write(f"**Fitness Goals:**")
-        goals = selected_client['fitness_goals']
+        goals = selected_client['FITNESS_GOALS']
         if isinstance(goals, str):
             import json
             goals = json.loads(goals)
@@ -767,7 +993,7 @@ def page_client_profiles():
             st.write(f"• {goal}")
         
         st.write(f"**Equipment Available:**")
-        equipment = selected_client['available_equipment']
+        equipment = selected_client['AVAILABLE_EQUIPMENT']
         if isinstance(equipment, str):
             import json
             equipment = json.loads(equipment)
@@ -777,8 +1003,8 @@ def page_client_profiles():
     with col2:
         st.markdown("### Training & Nutrition Targets")
         st.write(f"**Training Schedule:**")
-        st.write(f"• {selected_client['days_per_week']} days per week")
-        st.write(f"• {selected_client['workout_duration_min']} minutes per session")
+        st.write(f"• {selected_client['DAYS_PER_WEEK']} days per week")
+        st.write(f"• {selected_client['WORKOUT_DURATION_MIN']} minutes per session")
         
         st.write(f"**Nutrition Targets:**")
         if selected_client.get('target_calories'):
@@ -803,7 +1029,7 @@ def main():
     page = st.sidebar.radio(
         "Navigation",
         ["Home", "Workout Generator", "Meal Plan Generator", "Weight Tracking", "Client Profiles"],
-        icons=["🏠", "💪", "🍽️", "⚖️", "👥"]
+        # icons=["🏠", "💪", "🍽️", "⚖️", "👥"]
     )
     
     st.sidebar.divider()
