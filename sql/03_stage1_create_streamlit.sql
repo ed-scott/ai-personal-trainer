@@ -61,10 +61,12 @@ GRANT READ ON STAGE streamlit_app_stage TO ROLE TRAINING_APP_ADMIN;
 
 -- Use ACCOUNTADMIN to create the Streamlit object
 -- This uses the Git repository instead of internal stage
+ALTER GIT REPOSITORY ai_personal_trainer_repo FETCH;
 CREATE STREAMLIT IF NOT EXISTS training_db.public.ai_personal_trainer
   FROM @ai_personal_trainer_repo/branches/main/streamlit_app
   MAIN_FILE = 'app.py'
-  IMPORTS = ('@ai_personal_trainer_repo/branches/main/streamlit_app/environment.yml')
+  IMPORTS = ('@ai_personal_trainer_repo/branches/main/streamlit_app/environment.yml',
+             '@ai_personal_trainer_repo/branches/main/streamlit_app/app.py')
   QUERY_WAREHOUSE = training_wh
   TITLE = 'AI Personal Trainer - Stage 1'
   COMMENT = 'Personalized Workout and Meal Plan Generation with Cortex Prompt Complete'
