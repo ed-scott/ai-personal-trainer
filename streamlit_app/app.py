@@ -487,6 +487,116 @@ def insert_weigh_in(client_id: str, weigh_in_date: datetime, weight_kg: float, b
         st.error(f"Error saving weigh-in: {str(e)}")
         return None
 
+def insert_exercise_result(client_id: str, workout_id: str, exercise_id: str, performed_date: datetime,
+                           set_number: int, reps: int, weight_kg: float = None, rpe: float = None,
+                           rest_seconds: int = None, duration_seconds: int = None, notes: str = None):
+    """Insert a single exercise set result into the exercise_results table"""
+    try:
+        result_id = generate_uuid()
+
+        insert_sql = f"""
+        INSERT INTO TRAINING_DB.PUBLIC.exercise_results
+        (result_id, client_id, workout_id, exercise_id, performed_date, set_number, reps, weight_kg, rpe, rest_seconds, duration_seconds, notes)
+        SELECT
+        '{result_id}',
+        '{client_id}',
+        '{workout_id}',
+        '{exercise_id}',
+        '{performed_date.strftime('%Y-%m-%d')}',
+        {set_number},
+        {reps},
+        {weight_kg if weight_kg is not None else 'NULL'},
+        {rpe if rpe is not None else 'NULL'},
+        {rest_seconds if rest_seconds is not None else 'NULL'},
+        {duration_seconds if duration_seconds is not None else 'NULL'},
+        {f"'{notes.replace("'", "''")}'" if notes else 'NULL'}
+        """
+
+        session.sql(insert_sql).collect()
+        log_event('exercise_result_recorded', client_id=client_id,
+                  message=f'Result recorded for workout {workout_id}, exercise {exercise_id}, set {set_number}')
+        return result_id
+    except Exception as e:
+        st.error(f"Error saving exercise result: {str(e)}")
+        return None
+
+def get_exercise_progress(client_id: str, exercise_id: str):
+    """Fetch aggregated exercise progress for a client and exercise from the exercise_progress view.
+
+    Returns a dict with keys: client_id, exercise_id, max_weight_kg, avg_reps, avg_rpe,
+    sessions_recorded, estimated_1rm, recent_sets (list of JSON objects)
+    """
+    try:
+        sql = f"SELECT * FROM TRAINING_DB.PUBLIC.exercise_progress WHERE client_id = '{client_id}' AND exercise_id = '{exercise_id}'"
+        df = session.sql(sql).to_pandas()
+        if df.empty:
+            return None
+
+        row = df.iloc[0].to_dict()
+
+        # Parse the recent_sets Variant/ARRAY into Python list if it's a string
+        recent_sets = row.get('RECENT_SETS')
+        if isinstance(recent_sets, str):
+            try:
+                recent_sets = json.loads(recent_sets)
+            except Exception:
+                # Leave as-is if parsing fails
+                pass
+
+        return {
+            'client_id': row.get('CLIENT_ID'),
+            'exercise_id': row.get('EXERCISE_ID'),
+            'max_weight_kg': row.get('MAX_WEIGHT_KG'),
+            'avg_reps': row.get('AVG_REPS'),
+            'avg_rpe': row.get('AVG_RPE'),
+            'sessions_recorded': int(row.get('SESSIONS_RECORDED')) if row.get('SESSIONS_RECORDED') is not None else 0,
+            'estimated_1rm': row.get('ESTIMATED_1RM'),
+            'recent_sets': recent_sets
+        }
+    except Exception as e:
+        st.warning(f"Could not fetch exercise progress: {str(e)}")
+        return None
+
+def get_exercise_1rm_trend(client_id: str, exercise_id: str, weeks: int = 12):
+    """Return a pandas DataFrame with weekly estimated 1RM (Epley) for the last `weeks` weeks.
+
+    Columns: week_start (date), estimated_1rm_max, avg_reps, total_sets, weekly_volume
+    """
+    try:
+        sql = f"""
+        SELECT
+          DATE_TRUNC('week', performed_date) AS week_start,
+          MAX(CASE WHEN weight_kg IS NOT NULL THEN weight_kg * (1 + reps / 30.0) ELSE NULL END) AS estimated_1rm_max,
+          AVG(reps) AS avg_reps,
+          COUNT(*) AS total_sets,
+          SUM(CASE WHEN weight_kg IS NOT NULL THEN weight_kg * reps ELSE 0 END) AS weekly_volume
+        FROM TRAINING_DB.PUBLIC.exercise_results
+        WHERE client_id = '{client_id}'
+          AND exercise_id = '{exercise_id}'
+          AND performed_date >= DATEADD(week, -{weeks}, CURRENT_DATE())
+        GROUP BY week_start
+        ORDER BY week_start ASC
+        """
+
+        df = session.sql(sql).to_pandas()
+        if df.empty:
+            return pd.DataFrame(columns=['week_start', 'estimated_1rm_max', 'avg_reps', 'total_sets', 'weekly_volume'])
+
+        # Ensure proper dtypes
+        df['WEEK_START'] = pd.to_datetime(df['WEEK_START']).dt.date
+        df = df.rename(columns={
+            'WEEK_START': 'week_start',
+            'ESTIMATED_1RM_MAX': 'estimated_1rm_max',
+            'AVG_REPS': 'avg_reps',
+            'TOTAL_SETS': 'total_sets',
+            'WEEKLY_VOLUME': 'weekly_volume'
+        })
+
+        return df
+    except Exception as e:
+        st.warning(f"Could not fetch 1RM trend: {str(e)}")
+        return pd.DataFrame(columns=['week_start', 'estimated_1rm_max', 'avg_reps', 'total_sets', 'weekly_volume'])
+
 def get_client_workouts(client_id: str):
     """Get all workouts for a client"""
     try:
@@ -1141,6 +1251,147 @@ def page_workout_summary():
             hide_index=True
         )
 
+
+def page_exercise_results():
+    st.title("🏋️ Record Exercise Results")
+    st.markdown("Record per-set exercise results (weight, reps, RPE, rest, notes)")
+
+    clients_df = get_clients()
+    if clients_df.empty:
+        st.warning("No clients found. Please create a client first in the Home page.")
+        return
+
+    selected_client_name = st.selectbox("Select Client", clients_df['CLIENT_NAME'].tolist(), key="er_client_select")
+    selected_client = clients_df[clients_df['CLIENT_NAME'] == selected_client_name].iloc[0]
+    client_id = selected_client['CLIENT_ID']
+
+    st.divider()
+
+    # Choose a workout for this client
+    workouts_df = get_client_workouts(client_id)
+    if workouts_df.empty:
+        st.info("No workouts found for this client. Generate a workout first.")
+        return
+
+    # format workout display
+    workouts_df['DISPLAY'] = workouts_df.apply(lambda r: f"{r['WORKOUT_DATE']} | Week {r['WORKOUT_WEEK']} Day {r['WORKOUT_DAY']} | {r['WORKOUT_FOCUS']}", axis=1)
+    workout_choice = st.selectbox("Select Workout", workouts_df['DISPLAY'].tolist(), key="er_workout_select")
+    workout_row = workouts_df[workouts_df['DISPLAY'] == workout_choice].iloc[0]
+    workout_id = workout_row['WORKOUT_ID']
+    workout_date = workout_row.get('WORKOUT_DATE')
+
+    # Parse exercises JSON stored in the workout
+    exercises = workout_row.get('EXERCISES', [])
+    if isinstance(exercises, str):
+        exercises = json.loads(exercises)
+
+    if not exercises:
+        st.info("No exercises found in the selected workout.")
+        return
+
+    st.markdown(f"**Workout:** {workout_choice}")
+
+    # Select exercise
+    exercise_names = [f"{i+1}. {ex.get('name','Unnamed')}" for i, ex in enumerate(exercises)]
+    ex_choice = st.selectbox("Select Exercise", exercise_names, key="er_ex_select")
+    ex_index = exercise_names.index(ex_choice)
+    exercise = exercises[ex_index]
+    exercise_name = exercise.get('name')
+
+    st.markdown(f"**Exercise:** {exercise_name}")
+
+    # --- Progress panel: show aggregated metrics and weekly 1RM trend ---
+    ex_id_for_progress = exercise.get('id') or exercise.get('exercise_id') or exercise_name
+    progress = get_exercise_progress(client_id, ex_id_for_progress)
+    trend_df = get_exercise_1rm_trend(client_id, ex_id_for_progress, weeks=12)
+
+    with st.expander("Progress & Trend", expanded=True):
+        if progress:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Estimated 1RM", f"{progress.get('estimated_1rm', 'N/A'):.1f}" if progress.get('estimated_1rm') else "N/A")
+            c2.metric("Max Weight", f"{progress.get('max_weight_kg', 'N/A'):.1f} kg" if progress.get('max_weight_kg') else "N/A")
+            c3.metric("Avg Reps", f"{progress.get('avg_reps', 'N/A'):.1f}" if progress.get('avg_reps') else "N/A")
+            c4.metric("Sessions", f"{progress.get('sessions_recorded', 0)}")
+
+            # Recent sets table (limit 8)
+            recent = progress.get('recent_sets') or []
+            if isinstance(recent, str):
+                try:
+                    recent = json.loads(recent)
+                except Exception:
+                    recent = []
+
+            if recent:
+                recent_tbl = pd.DataFrame(recent)
+                if not recent_tbl.empty:
+                    st.markdown("**Recent Sets (most recent first)**")
+                    # show only a few columns for compact view
+                    cols_to_show = [c for c in ['performed_date', 'set_number', 'reps', 'weight_kg', 'rpe', 'rest_seconds'] if c in recent_tbl.columns]
+                    st.dataframe(recent_tbl[cols_to_show].head(8), use_container_width=True)
+        else:
+            st.info("No progress data available for this exercise yet.")
+
+        # Trend chart (weekly estimated 1RM)
+        if not trend_df.empty and 'estimated_1rm_max' in trend_df.columns:
+            fig = px.line(trend_df, x='week_start', y='estimated_1rm_max', markers=True, title='Weekly Estimated 1RM (Epley)')
+            fig.update_layout(xaxis_title='Week Start', yaxis_title='Estimated 1RM (kg)')
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Not enough historical data to plot a weekly 1RM trend. Record some sets to see trends.")
+
+    # Input performed date and sets
+    col1, col2 = st.columns(2)
+    with col1:
+        performed_date = st.date_input("Performed Date", value=workout_date if workout_date else datetime.now().date(), key="er_date")
+    with col2:
+        default_sets = exercise.get('sets', 3)
+        sets_to_record = st.number_input("Number of Sets to Record", min_value=1, max_value=20, value=default_sets, key="er_sets")
+
+    # Dynamic inputs for each set
+    set_entries = []
+    for s in range(1, sets_to_record + 1):
+        with st.expander(f"Set {s}", expanded=(s == 1)):
+            c1, c2, c3, c4 = st.columns(4)
+            reps = c1.number_input(f"Reps (Set {s})", min_value=0, max_value=100, value=exercise.get('reps', 0) if isinstance(exercise.get('reps'), int) else 10, key=f"er_{s}_reps")
+            weight = c2.number_input(f"Weight (kg) (Set {s})", min_value=0.0, max_value=1000.0, value=0.0, format="%.2f", key=f"er_{s}_weight")
+            rpe = c3.number_input(f"RPE (Set {s})", min_value=0.0, max_value=10.0, value=0.0, format="%.1f", key=f"er_{s}_rpe")
+            rest = c4.number_input(f"Rest sec (Set {s})", min_value=0, max_value=600, value=exercise.get('rest_sec', 60), key=f"er_{s}_rest")
+            duration = st.number_input(f"Duration sec (Set {s})", min_value=0, max_value=3600, value=0, key=f"er_{s}_dur")
+            note = st.text_input(f"Notes (Set {s})", value="", key=f"er_{s}_notes")
+            set_entries.append({
+                'set_number': s,
+                'reps': int(reps),
+                'weight_kg': float(weight) if weight != 0.0 else None,
+                'rpe': float(rpe) if rpe != 0.0 else None,
+                'rest_seconds': int(rest) if rest != 0 else None,
+                'duration_seconds': int(duration) if duration != 0 else None,
+                'notes': note if note else None
+            })
+
+    if st.button("✅ Save Exercise Results", use_container_width=True, type="primary"):
+        saved = 0
+        for entry in set_entries:
+            rid = insert_exercise_result(
+                client_id=client_id,
+                workout_id=workout_id,
+                exercise_id=exercise.get('id') or exercise.get('exercise_id') or exercise_name,
+                performed_date=performed_date,
+                set_number=entry['set_number'],
+                reps=entry['reps'],
+                weight_kg=entry['weight_kg'],
+                rpe=entry['rpe'],
+                rest_seconds=entry['rest_seconds'],
+                duration_seconds=entry['duration_seconds'],
+                notes=entry['notes']
+            )
+            if rid:
+                saved += 1
+
+        if saved > 0:
+            st.success(f"✅ Saved {saved} set result(s) for {exercise_name}")
+        else:
+            st.error("No results were saved. Check for errors above.")
+
 # ============================================================================
 # Page: Meal Plan Summary
 # ============================================================================
@@ -1381,8 +1632,8 @@ def main():
     
     page = st.sidebar.radio(
         "Navigation",
-        ["Home", "Workout Generator", "Meal Plan Generator", "Workout Summary", "Meal Plan Summary", "Weight Tracking", "Client Profiles"],
-        # icons=["🏠", "💪", "🍽️", "📊", "📊", "⚖️", "👥"]
+        ["Home", "Workout Generator", "Record Exercise Results", "Meal Plan Generator", "Workout Summary", "Meal Plan Summary", "Weight Tracking", "Client Profiles"],
+        # icons=["🏠", "💪", "📝", "🍽️", "📊", "📊", "⚖️", "👥"]
     )
     
     st.sidebar.divider()
@@ -1401,6 +1652,8 @@ def main():
         page_home()
     elif page == "Workout Generator":
         page_workout_generator()
+    elif page == "Record Exercise Results":
+        page_exercise_results()
     elif page == "Meal Plan Generator":
         page_meal_plan_generator()
     elif page == "Workout Summary":

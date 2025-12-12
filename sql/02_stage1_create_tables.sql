@@ -130,6 +130,35 @@ COMMENT = 'AI-generated workouts using Snowflake Cortex Prompt Complete';
 GRANT SELECT, INSERT, UPDATE, DELETE ON generated_workouts TO ROLE TRAINING_APP_ROLE;
 
 -- ============================================================================
+-- Table 5b: EXERCISE_RESULTS - Exercise Performance Tracking
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS exercise_results (
+  result_id VARCHAR(36) DEFAULT TO_VARCHAR(UUID_STRING()) NOT NULL,
+  client_id VARCHAR(36) NOT NULL,
+  workout_id VARCHAR(36) NOT NULL,
+  exercise_id VARCHAR(36) NOT NULL,
+  performed_date DATE NOT NULL COMMENT 'Date the exercise/set was performed',
+  set_number NUMBER(3,0) NOT NULL COMMENT 'Set index (1..n) for the exercise',
+  reps NUMBER(5,0) NOT NULL COMMENT 'Number of repetitions performed',
+  weight_kg NUMBER(7,3) COMMENT 'Weight used for the set in kilograms',
+  rpe NUMBER(3,1) COMMENT 'Rate of perceived exertion (optional)',
+  rest_seconds NUMBER(6,0) COMMENT 'Rest between sets in seconds (optional)',
+  duration_seconds NUMBER(6,0) COMMENT 'Duration of the set in seconds (optional)',
+  notes VARCHAR(2000) COMMENT 'Optional notes about technique or conditions',
+  recorded_at TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  PRIMARY KEY (result_id),
+  FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+  FOREIGN KEY (workout_id) REFERENCES generated_workouts(workout_id) ON DELETE CASCADE,
+  FOREIGN KEY (exercise_id) REFERENCES exercises_library(exercise_id) ON DELETE RESTRICT,
+  CONSTRAINT unique_result_per_set UNIQUE (client_id, workout_id, exercise_id, set_number)
+)
+COMMENT = 'Individual exercise set results used to evaluate client performance and progression';
+
+--CREATE INDEX IF NOT EXISTS idx_ex_results_client_workout ON exercise_results (client_id, workout_id, exercise_id);
+GRANT SELECT, INSERT, UPDATE, DELETE ON exercise_results TO ROLE TRAINING_APP_ROLE;
+
+-- ============================================================================
 -- Table 6: RECIPES - Recipe Library
 -- ============================================================================
 
